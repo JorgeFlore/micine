@@ -32,7 +32,7 @@ export default {
     const url = new URL(req.url);
     const { pathname } = url;
     if (req.method === "OPTIONS") {
-      if (pathname.startsWith("/cast")) return new Response(null, { headers: {
+      if (/^\/(cast|castsub)\//.test(pathname)) return new Response(null, { headers: {
         "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Range",
         "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS" } });
       return new Response(null, { headers: cors });
