@@ -26,6 +26,11 @@ Los nombres de usuario van en minúsculas. Si borras a alguien de la lista, pier
    - `SESSION_SECRET`: cualquier texto largo y aleatorio.
 5. Pega la URL del Worker en `index.html`, en `WORKER_URL`.
 
+## Carátulas
+- Automáticas desde TMDB: agrega el secreto `TMDB_KEY` en el Worker (token de lectura de themoviedb.org → Ajustes → API).
+- Para el mejor resultado, nombra el archivo `Titulo (Año).mp4`.
+- Carátula propia: pon una imagen con el mismo nombre que la película (`Pelicula.jpg`), o `poster.jpg` en la carpeta de la película. Tiene prioridad sobre TMDB.
+
 ## Formatos
 Funcionan **MP4 (H.264 + AAC)** y WebM en todos los dispositivos. Los MKV hay que convertirlos a MP4.
 Subtítulos: un `.srt` con el mismo nombre que la película, por ejemplo `Pelicula.mp4` + `Pelicula.es.srt`.

@@ -7,6 +7,7 @@
 //   FOLDER_ID       ID de la carpeta "Peliculas" de Drive
 //   USERS           {"jorge":"clave1","mama":"clave2"}  (usuario en minúsculas)
 //   SESSION_SECRET  texto largo y aleatorio (firma las sesiones)
+//   TMDB_KEY        (opcional) clave API o token de lectura de themoviedb.org, para carátulas
 
 const ALLOWED_ORIGINS = ["https://jorgeflore.github.io", "http://localhost:8000"];
 const SESSION_DAYS = 30;
@@ -25,7 +26,8 @@ export default {
       new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
     if (req.method === "OPTIONS") return new Response(null, { headers: cors });
-    const { pathname } = new URL(req.url);
+    const url = new URL(req.url);
+    const { pathname } = url;
 
     try {
       const users = JSON.parse(env.USERS);
@@ -42,11 +44,28 @@ export default {
         return json({ session, user: u });
       }
 
+      const s = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/, "");
+      const data = await verifySession(s, env.SESSION_SECRET);
+      // Si borras a alguien de USERS, pierde el acceso de inmediato.
+      const authed = data && Object.hasOwn(users, data.u);
+
+      if (pathname === "/meta") {
+        if (!authed) return json({ error: "Sesión inválida" }, 401);
+        if (!env.TMDB_KEY) return json({ error: "Falta TMDB_KEY" }, 501);
+        const q = url.searchParams.get("q") || "", y = url.searchParams.get("y") || "";
+        const cacheKey = new Request("https://micine-cache/meta?q=" + encodeURIComponent(q) + "&y=" + y);
+        const hit = await caches.default.match(cacheKey);
+        if (hit) return new Response(hit.body, { headers: { ...cors, "Content-Type": "application/json" } });
+        const meta = await tmdb(q, y, env.TMDB_KEY);
+        const res = new Response(JSON.stringify(meta), {
+          headers: { "Content-Type": "application/json", "Cache-Control": "max-age=2592000" },
+        });
+        await caches.default.put(cacheKey, res.clone());
+        return new Response(res.body, { headers: { ...cors, "Content-Type": "application/json" } });
+      }
+
       if (pathname === "/token") {
-        const s = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/, "");
-        const data = await verifySession(s, env.SESSION_SECRET);
-        // Si borras a alguien de USERS, pierde el acceso de inmediato.
-        if (!data || !Object.hasOwn(users, data.u)) return json({ error: "Sesión inválida" }, 401);
+        if (!authed) return json({ error: "Sesión inválida" }, 401);
         const t = await googleToken(env);
         return json({
           access_token: t.token,
@@ -62,6 +81,34 @@ export default {
     }
   },
 };
+
+/* ---------- Carátulas y sinopsis desde TMDB ---------- */
+async function tmdb(q, y, key) {
+  const isToken = key.startsWith("eyJ"); // token de lectura v4 o clave v3
+  const search = async (lang, year) => {
+    const p = new URLSearchParams({ query: q, language: lang, include_adult: "false" });
+    if (year) p.set("year", year);
+    if (!isToken) p.set("api_key", key);
+    const r = await fetch("https://api.themoviedb.org/3/search/movie?" + p,
+      { headers: isToken ? { Authorization: "Bearer " + key } : {} });
+    if (!r.ok) throw new Error("TMDB " + r.status);
+    return (await r.json()).results || [];
+  };
+  let res = await search("es-MX", y);
+  if (!res.length && y) res = await search("es-MX", "");
+  const m = res.find(x => x.poster_path) || res[0];
+  if (!m) return { found: false };
+  let overview = m.overview;
+  if (!overview) overview = ((await search("en-US", y)).find(x => x.id === m.id) || {}).overview || "";
+  return {
+    found: true,
+    title: m.title,
+    year: (m.release_date || "").slice(0, 4),
+    overview,
+    poster: m.poster_path ? "https://image.tmdb.org/t/p/w342" + m.poster_path : null,
+    rating: m.vote_average ? Math.round(m.vote_average * 10) / 10 : null,
+  };
+}
 
 /* ---------- Token de Google con la cuenta de servicio ---------- */
 async function googleToken(env) {

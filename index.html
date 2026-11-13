@@ -46,7 +46,20 @@
   #iosTip{position:fixed;left:12px;right:12px;bottom:12px;z-index:30;background:var(--card2);border:1px solid #333a47;border-radius:12px;padding:14px 40px 14px 14px;font-size:14px;line-height:1.4}
   #iosTip b{color:var(--acc)} #iosTip button{position:absolute;top:8px;right:8px;padding:2px 9px}
   header{padding-top:max(14px,env(safe-area-inset-top))}
-  @media (max-width:600px){#who{display:none} header{flex-wrap:wrap} input[type=search]{order:9;width:100%}}
+  .poster.img{background-size:cover;background-position:center;font-size:0;padding:0}
+  .ttl{padding:8px 10px 0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ttl:empty{display:none}
+  #info{position:fixed;inset:0;z-index:15;background:rgba(0,0,0,.75);display:none;align-items:center;justify-content:center;padding:16px}
+  #info.on{display:flex}
+  #info .box{background:var(--card);border-radius:16px;max-width:720px;width:100%;max-height:90vh;overflow:auto;display:flex;gap:18px;padding:18px}
+  #info img{width:200px;border-radius:10px;align-self:flex-start;flex-shrink:0}
+  #info h2{margin:0 0 6px}
+  #info .sub{color:var(--mut);font-size:14px;margin-bottom:12px}
+  #info p{line-height:1.5;color:#cfd5df;margin:0 0 16px}
+  #info .acts{display:flex;gap:10px;flex-wrap:wrap}
+  @media (max-width:600px){#who{display:none} header{flex-wrap:wrap} input[type=search]{order:9;width:100%}
+    .grid{grid-template-columns:repeat(3,1fr);gap:10px} .poster{font-size:13px;padding:8px} .meta{padding:6px 8px 8px;font-size:11px} .ttl{font-size:12px;padding:6px 8px 0}
+    #info .box{flex-direction:column;align-items:center;text-align:center} #info img{width:150px;align-self:center} #info .acts{justify-content:center}}
 </style>
 </head>
 <body>
@@ -58,6 +71,7 @@
   <button id="btnOut" hidden>Salir</button>
 </header>
 <main id="app"><div class="center">Cargando…</div></main>
+<div id="info"><div class="box"></div></div>
 
 <div id="player">
   <div id="pbar">
@@ -163,12 +177,13 @@ async function listChildren(id){
   } while (pageToken);
   return out;
 }
-async function scan(id, depth = 0, acc = { videos: [], subs: [] }){
+async function scan(id, depth = 0, acc = { videos: [], subs: [], imgs: [] }){
   const items = await listChildren(id), sub = [];
   for (const f of items) {
     if (f.mimeType === "application/vnd.google-apps.folder") { if (depth < 4) sub.push(scan(f.id, depth + 1, acc)); }
     else if (f.mimeType.startsWith("video/") || VIDEO_EXT.test(f.name)) acc.videos.push({ ...f, folder: id });
     else if (/\.(srt|vtt)$/i.test(f.name)) acc.subs.push({ ...f, folder: id });
+    else if (/\.(jpe?g|png|webp)$/i.test(f.name)) acc.imgs.push({ ...f, folder: id });
   }
   await Promise.all(sub);
   return acc;
@@ -186,15 +201,24 @@ async function start(){
     await ensureToken();
     ["#q","#btnOut"].forEach(s => $(s).hidden = false);
     $("#who").textContent = "👤 " + user;
-    const { videos, subs } = await scan(folderId);
+    const { videos, subs, imgs } = await scan(folderId);
     movies = videos.map(v => {
       const base = v.name.replace(/\.[^.]+$/, "");
+      const lb = base.toLowerCase();
       const here = subs.filter(s => s.folder === v.folder);
-      const exact = here.filter(s => s.name.toLowerCase().startsWith(base.toLowerCase()));
+      const exact = here.filter(s => s.name.toLowerCase().startsWith(lb));
       const alone = videos.filter(x => x.folder === v.folder).length === 1;
-      return { ...v, title: cleanTitle(base), subs: exact.length ? exact : (alone ? here : []) };
+      // Carátula propia: imagen con el mismo nombre, o poster/cover/folder.jpg en su carpeta
+      const pics = imgs.filter(i => i.folder === v.folder);
+      const pic = pics.find(i => i.name.replace(/\.[^.]+$/, "").toLowerCase() === lb)
+        || (alone && (pics.find(i => /^(poster|cover|folder|caratula)\./i.test(i.name)) || (pics.length === 1 && pics[0])));
+      const title = cleanTitle(base);
+      const ym = title.match(/^(.*?)[\s(\[-]*((?:19|20)\d\d)[)\]]?$/);
+      return { ...v, title, q: ym ? ym[1].trim() : title, year: ym ? ym[2] : "",
+        pic: pic || null, subs: exact.length ? exact : (alone ? here : []) };
     }).sort((a, b) => a.title.localeCompare(b.title, "es"));
     render();
+    loadPosters();
   } catch (e) {
     if (e.message === "nologin") return;
     console.error(e);
@@ -218,11 +242,68 @@ function cardHTML(m){
   const dur = +m.videoMediaMetadata?.durationMillis || 0;
   const pct = p && dur ? Math.min(100, p * 1000 / dur * 100) : 0;
   const h = hue(m.title);
+  const img = posterOf(m);
   return `<div class="card" data-id="${m.id}">
-    <div class="poster" style="background:linear-gradient(160deg,hsl(${h} 45% 32%),hsl(${(h + 40) % 360} 50% 14%))">${esc(m.title)}</div>
-    <div class="meta"><span>${fmtDur(dur)}</span><span>${fmtSize(m.size)}</span></div>
+    <div class="poster${img ? " img" : ""}" style="background:${img ? `url('${img}')` : `linear-gradient(160deg,hsl(${h} 45% 32%),hsl(${(h + 40) % 360} 50% 14%))`};${img ? "background-size:cover;background-position:center" : ""}">${esc(m.title)}</div>
+    <div class="ttl">${img ? esc(m.title) : ""}</div>
+    <div class="meta"><span>${fmtDur(dur) || (metaOf(m)?.year || "")}</span><span>${fmtSize(m.size)}</span></div>
     ${pct ? `<div class="prog" style="width:${pct}%"></div>` : ""}</div>`;
 }
+
+/* ---------- Carátulas ---------- */
+const picUrls = {}; // id de película → URL de su imagen propia de Drive
+const metaKey = m => "meta2:" + m.q.toLowerCase() + "|" + m.year;
+const metaOf = m => store.get(metaKey(m), null);
+const posterOf = m => picUrls[m.id] || metaOf(m)?.poster || null;
+function refreshCard(m){
+  document.querySelectorAll(`.card[data-id="${m.id}"]`).forEach(c => {
+    const tmp = document.createElement("div"); tmp.innerHTML = cardHTML(m);
+    const n = tmp.firstElementChild; n.onclick = c.onclick; c.replaceWith(n);
+  });
+}
+async function loadPosters(){
+  const queue = movies.slice();
+  const worker = async () => {
+    for (let m; (m = queue.shift()); ) {
+      try {
+        if (m.pic && !picUrls[m.id]) {
+          const blob = await (await api("/files/" + m.pic.id, { alt: "media" })).blob();
+          picUrls[m.id] = URL.createObjectURL(blob); refreshCard(m);
+        }
+        if (!metaOf(m)) {
+          const r = await fetch(`${WORKER_URL}/meta?q=${encodeURIComponent(m.q)}&y=${m.year}`,
+            { headers: { Authorization: "Bearer " + store.get("session", "") } });
+          if (r.status === 501) return; // sin TMDB_KEY configurada
+          if (r.ok) { store.set(metaKey(m), await r.json()); refreshCard(m); }
+        }
+      } catch (e) { console.warn("carátula", m.title, e); }
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+}
+
+/* ---------- Ficha de la película ---------- */
+function showInfo(m){
+  const meta = metaOf(m) || {}, img = posterOf(m);
+  const dur = fmtDur(+m.videoMediaMetadata?.durationMillis || 0);
+  const pos = store.get(posKey(m.id), 0);
+  const sub = [meta.year || m.year, dur, meta.rating ? "⭐ " + meta.rating : "", m.subs.length ? "Subtítulos" : ""].filter(Boolean).join(" · ");
+  $("#info .box").innerHTML = `
+    ${img ? `<img src="${img}" alt="">` : ""}
+    <div><h2>${esc(meta.title || m.title)}</h2><div class="sub">${esc(sub)}</div>
+      <p>${esc(meta.overview || "Sin sinopsis.")}</p>
+      <div class="acts">
+        <button class="pri" id="iPlay">▶ ${pos > 60 && !store.get(doneKey(m.id), false) ? "Continuar" : "Ver"}</button>
+        ${pos > 60 ? `<button id="iRestart">Desde el inicio</button>` : ""}
+        <button id="iClose">Cerrar</button>
+      </div></div>`;
+  $("#info").classList.add("on");
+  const close = () => $("#info").classList.remove("on");
+  $("#iClose").onclick = close;
+  $("#iPlay").onclick = () => { close(); play(m); };
+  if ($("#iRestart")) $("#iRestart").onclick = () => { store.set(posKey(m.id), 0); store.set(doneKey(m.id), false); close(); play(m); };
+}
+$("#info").onclick = e => { if (e.target.id === "info") $("#info").classList.remove("on"); };
 function render(){
   const q = $("#q").value.trim().toLowerCase();
   const list = movies.filter(m => !q || m.title.toLowerCase().includes(q));
@@ -231,7 +312,7 @@ function render(){
   app.innerHTML =
     (cont.length && !q ? `<h3 class="sec">Seguir viendo</h3><div class="grid">${cont.map(cardHTML).join("")}</div>` : "") +
     `<h3 class="sec">${q ? "Resultados" : "Todas"} (${list.length})</h3><div class="grid">${list.map(cardHTML).join("")}</div>`;
-  app.querySelectorAll(".card").forEach(c => c.onclick = () => play(movies.find(m => m.id === c.dataset.id)));
+  app.querySelectorAll(".card").forEach(c => c.onclick = () => showInfo(movies.find(m => m.id === c.dataset.id)));
 }
 $("#q").oninput = render;
 
