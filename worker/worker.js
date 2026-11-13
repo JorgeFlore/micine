@@ -60,7 +60,7 @@ export default {
         if (!authed) return json({ error: "Sesión inválida" }, 401);
         if (!env.TMDB_KEY) return json({ error: "Falta TMDB_KEY" }, 501);
         const q = url.searchParams.get("q") || "", y = url.searchParams.get("y") || "";
-        const cacheKey = new Request("https://micine-cache/meta?q=" + encodeURIComponent(q) + "&y=" + y);
+        const cacheKey = new Request("https://micine-cache/meta3?q=" + encodeURIComponent(q) + "&y=" + y);
         const hit = await caches.default.match(cacheKey);
         if (hit) return new Response(hit.body, { headers: { ...cors, "Content-Type": "application/json" } });
         const meta = await tmdb(q, y, env.TMDB_KEY);
@@ -190,8 +190,14 @@ async function tmdb(q, y, key) {
     overview,
     poster: m.poster_path ? "https://image.tmdb.org/t/p/w342" + m.poster_path : null,
     rating: m.vote_average ? Math.round(m.vote_average * 10) / 10 : null,
+    backdrop: m.backdrop_path ? "https://image.tmdb.org/t/p/w1280" + m.backdrop_path : null,
+    genres: (m.genre_ids || []).map(g => GENRES[g]).filter(Boolean),
   };
 }
+const GENRES = { 28: "Acción", 12: "Aventura", 16: "Animación", 35: "Comedia", 80: "Crimen",
+  99: "Documental", 18: "Drama", 10751: "Familia", 14: "Fantasía", 36: "Historia", 27: "Terror",
+  10402: "Música", 9648: "Misterio", 10749: "Romance", 878: "Ciencia ficción", 10770: "Película de TV",
+  53: "Suspenso", 10752: "Bélica", 37: "Western" };
 
 /* ---------- Token de Google con la cuenta de servicio ---------- */
 async function googleToken(env) {

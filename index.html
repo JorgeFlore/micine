@@ -24,7 +24,7 @@
   button{background:var(--card2);color:var(--txt);border:1px solid #333a47;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer}
   button:hover{border-color:#566}
   button.pri{background:var(--acc);border-color:var(--acc);font-weight:600}
-  main{padding:20px;max-width:1400px;margin:0 auto}
+  main{padding:20px;margin:0 auto}
   .center{text-align:center;padding:60px 20px;color:var(--mut)}
   .center h2{color:var(--txt)}
   form.login{display:flex;flex-direction:column;gap:12px;width:min(340px,90vw);margin:24px auto 0}
@@ -57,6 +57,25 @@
   #info .sub{color:var(--mut);font-size:14px;margin-bottom:12px}
   #info p{line-height:1.5;color:#cfd5df;margin:0 0 16px}
   #info .acts{display:flex;gap:10px;flex-wrap:wrap}
+  /* --- Portada estilo Netflix --- */
+  .hero{position:relative;margin:-20px -20px 8px;min-height:min(62vh,560px);display:flex;align-items:flex-end;background:#000 center/cover no-repeat}
+  .hero::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(15,17,21,.95) 0%,rgba(15,17,21,.6) 45%,rgba(15,17,21,0) 75%),linear-gradient(0deg,var(--bg) 0%,rgba(15,17,21,0) 40%)}
+  .hero .hc{position:relative;z-index:1;padding:40px 4vw 48px;max-width:640px}
+  .hero h2{font-size:clamp(28px,4.5vw,52px);margin:0 0 10px;line-height:1.05;text-shadow:0 2px 12px rgba(0,0,0,.6)}
+  .hero .hs{color:#cfd5df;font-size:14px;margin-bottom:12px}
+  .hero .hs .g{border:1px solid #556;border-radius:4px;padding:1px 6px;margin-left:6px;font-size:12px}
+  .hero p{color:#dfe3ea;line-height:1.5;margin:0 0 18px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .hero .acts{display:flex;gap:10px}
+  .hero .acts button{padding:11px 22px;font-size:16px;font-weight:600;border-radius:6px}
+  .hero .acts .w{background:#fff;color:#000;border-color:#fff}
+  .hero .acts .gr{background:rgba(110,118,135,.55);border-color:transparent}
+  .rowwrap{position:relative;margin:0 -20px}
+  .row{display:grid;grid-auto-flow:column;grid-auto-columns:clamp(130px,13vw,190px);gap:12px;overflow-x:auto;scroll-snap-type:x proximity;padding:4px 20px 10px;scrollbar-width:none}
+  .row::-webkit-scrollbar{display:none}
+  .row .card{scroll-snap-align:start}
+  .arr{position:absolute;top:4px;bottom:10px;width:44px;z-index:2;border:0;border-radius:0;background:rgba(15,17,21,.75);font-size:26px;opacity:0;transition:opacity .2s}
+  .rowwrap:hover .arr{opacity:1} .arr.l{left:0} .arr.r{right:0}
+  @media (hover:none){.arr{display:none}}
   #castBar{position:fixed;left:0;right:0;bottom:0;z-index:12;background:#1d2029;border-top:1px solid #333a47;padding:10px 16px calc(10px + env(safe-area-inset-bottom));display:none;gap:12px;align-items:center}
   #castBar.on{display:flex}
   #castBar img{width:40px;height:60px;object-fit:cover;border-radius:4px}
@@ -68,6 +87,9 @@
   body.casting main{padding-bottom:120px}
   @media (max-width:600px){#who{display:none} header{flex-wrap:wrap} input[type=search]{order:9;width:100%}
     .grid{grid-template-columns:repeat(3,1fr);gap:10px} .poster{font-size:13px;padding:8px} .meta{padding:6px 8px 8px;font-size:11px} .ttl{font-size:12px;padding:6px 8px 0}
+    .hero{min-height:70vh;background-position:center top} .hero::after{background:linear-gradient(0deg,var(--bg) 0%,rgba(15,17,21,.75) 45%,rgba(15,17,21,.15) 100%)}
+    .hero .hc{padding:24px 16px 28px;text-align:center;margin:0 auto} .hero .acts{justify-content:center} .hero p{font-size:14px}
+    .row{grid-auto-columns:31%;gap:8px;padding:4px 20px 8px}
     #info .box{flex-direction:column;align-items:center;text-align:center} #info img{width:150px;align-self:center} #info .acts{justify-content:center}}
 </style>
 </head>
@@ -187,7 +209,7 @@ async function listChildren(id){
   let out = [], pageToken;
   do {
     const p = { q: `'${id}' in parents and trashed=false`, pageSize: 1000,
-      fields: "nextPageToken,files(id,name,mimeType,size,videoMediaMetadata(durationMillis))",
+      fields: "nextPageToken,files(id,name,mimeType,size,createdTime,videoMediaMetadata(durationMillis))",
       supportsAllDrives: true, includeItemsFromAllDrives: true };
     if (pageToken) p.pageToken = pageToken;
     const j = await (await api("/files", p)).json();
@@ -310,7 +332,7 @@ function cardHTML(m){
 
 /* ---------- Carátulas ---------- */
 const picUrls = {}; // id de película → URL de su imagen propia de Drive
-const metaKey = m => "meta2:" + m.q.toLowerCase() + "|" + m.year;
+const metaKey = m => "meta3:" + m.q.toLowerCase() + "|" + m.year;
 const metaOf = m => store.get(metaKey(m), null);
 const posterOf = m => picUrls[m.id] || metaOf(m)?.poster || null;
 function refreshCard(m){
@@ -338,6 +360,9 @@ async function loadPosters(){
     }
   };
   await Promise.all([worker(), worker(), worker(), worker()]);
+  if (movies.some(m => metaOf(m)) && !$("#q").value && !$("#player").classList.contains("on")) {
+    const y = scrollY; render(); scrollTo(0, y);
+  }
 }
 
 /* ---------- Ficha de la película ---------- */
@@ -364,16 +389,63 @@ function showInfo(m){
   if ($("#iRestart")) $("#iRestart").onclick = () => { setProg(m.id, 0, false); close(); play(m); };
 }
 $("#info").onclick = e => { if (e.target.id === "info") $("#info").classList.remove("on"); };
+let heroId = null;
+function pickHero(cont){
+  if (heroId && movies.some(m => m.id === heroId)) return movies.find(m => m.id === heroId);
+  const withArt = movies.filter(m => metaOf(m)?.backdrop);
+  if (!withArt.length) return null;
+  // Prioriza lo que estás viendo; si no, una al azar entre las más nuevas
+  const pool = cont.filter(m => metaOf(m)?.backdrop);
+  const recent = withArt.slice().sort((a, b) => (b.createdTime || "").localeCompare(a.createdTime || "")).slice(0, 6);
+  const m = pool[0] || recent[Math.floor(Math.random() * recent.length)];
+  heroId = m.id; return m;
+}
+function heroHTML(m){
+  const meta = metaOf(m) || {}, pr = getProg(m.id);
+  const dur = fmtDur(+m.videoMediaMetadata?.durationMillis || 0);
+  const bits = [meta.year || m.year, dur, meta.rating ? "⭐ " + meta.rating : ""].filter(Boolean).join(" · ");
+  const g = (meta.genres || []).slice(0, 2).map(x => `<span class="g">${esc(x)}</span>`).join("");
+  return `<section class="hero" style="background-image:url('${meta.backdrop}')"><div class="hc">
+    <h2>${esc(meta.title || m.q)}</h2><div class="hs">${esc(bits)}${g}</div>
+    <p>${esc(meta.overview || "")}</p>
+    <div class="acts"><button class="w" id="hPlay">▶ ${pr.p > 60 && !pr.d ? "Continuar" : "Ver"}</button>
+    <button class="gr" id="hInfo">ⓘ Más info</button></div></div></section>`;
+}
+function rowHTML(title, list){
+  if (!list.length) return "";
+  return `<h3 class="sec">${esc(title)}</h3><div class="rowwrap"><button class="arr l">‹</button>
+    <div class="row">${list.map(cardHTML).join("")}</div><button class="arr r">›</button></div>`;
+}
 function render(){
   const q = $("#q").value.trim().toLowerCase();
-  const list = movies.filter(m => !q || m.title.toLowerCase().includes(q));
   if (!movies.length) { app.innerHTML = `<div class="center"><h2>Todavía no hay películas</h2><p>Súbelas a la carpeta de Drive y recarga.</p></div>`; return; }
-  const cont = list.filter(m => { const pr = getProg(m.id); return pr.p > 60 && !pr.d; })
+  const bind = () => app.querySelectorAll(".card").forEach(c => c.onclick = () => showInfo(movies.find(m => m.id === c.dataset.id)));
+  if (q) {
+    const list = movies.filter(m => (m.title + " " + (metaOf(m)?.title || "")).toLowerCase().includes(q));
+    app.innerHTML = `<h3 class="sec">Resultados (${list.length})</h3><div class="grid">${list.map(cardHTML).join("")}</div>`;
+    return bind();
+  }
+  const cont = movies.filter(m => { const pr = getProg(m.id); return pr.p > 60 && !pr.d; })
     .sort((a, b) => getProg(b.id).t - getProg(a.id).t);
+  const recent = movies.slice().sort((a, b) => (b.createdTime || "").localeCompare(a.createdTime || "")).slice(0, 12);
+  const byGenre = {};
+  for (const m of movies) for (const g of metaOf(m)?.genres || []) (byGenre[g] ||= []).push(m);
+  const genres = Object.entries(byGenre).filter(([, l]) => l.length >= 2 || movies.length < 12)
+    .sort((a, b) => b[1].length - a[1].length).slice(0, 8);
+  const hero = pickHero(cont);
   app.innerHTML =
-    (cont.length && !q ? `<h3 class="sec">Seguir viendo</h3><div class="grid">${cont.map(cardHTML).join("")}</div>` : "") +
-    `<h3 class="sec">${q ? "Resultados" : "Todas"} (${list.length})</h3><div class="grid">${list.map(cardHTML).join("")}</div>`;
-  app.querySelectorAll(".card").forEach(c => c.onclick = () => showInfo(movies.find(m => m.id === c.dataset.id)));
+    (hero ? heroHTML(hero) : "") +
+    rowHTML("Seguir viendo", cont) +
+    rowHTML("Agregadas recientemente", recent) +
+    genres.map(([g, l]) => rowHTML(g, l)).join("") +
+    `<h3 class="sec">Todas (${movies.length})</h3><div class="grid">${movies.map(cardHTML).join("")}</div>`;
+  bind();
+  if (hero) { $("#hPlay").onclick = () => play(hero); $("#hInfo").onclick = () => showInfo(hero); }
+  app.querySelectorAll(".rowwrap").forEach(w => {
+    const row = w.querySelector(".row");
+    w.querySelector(".l").onclick = () => row.scrollBy({ left: -row.clientWidth * 0.85, behavior: "smooth" });
+    w.querySelector(".r").onclick = () => row.scrollBy({ left: row.clientWidth * 0.85, behavior: "smooth" });
+  });
 }
 $("#q").oninput = render;
 
