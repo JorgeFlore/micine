@@ -1,26 +1,31 @@
-# Mi Cine — reproductor web para tus películas en Google Drive
+# Mi Cine — películas en Google Drive, con usuarios propios
 
-## 1. Crear la credencial de Google (una sola vez, gratis)
-1. Entra a https://console.cloud.google.com y crea un proyecto llamado "Mi Cine".
-2. Ve a **APIs y servicios → Biblioteca**, busca **Google Drive API** y actívala.
-3. Ve a **Pantalla de consentimiento de OAuth** (Google Auth Platform): tipo **Externo**, nombre "Mi Cine" y tu correo. En **Público** o **Usuarios de prueba**, agrega tu correo de Google.
-4. En **Credenciales → Crear credenciales → ID de cliente de OAuth**, elige el tipo **Aplicación web**.
-   - En **Orígenes de JavaScript autorizados** agrega `https://TU_USUARIO.github.io`.
-5. Copia el **ID de cliente** (termina en `.apps.googleusercontent.com`) y pégalo en `index.html`, en `CLIENT_ID`.
+Página: https://jorgeflore.github.io/micine/
 
-## 2. Publicar la página (GitHub Pages, gratis)
-1. Crea en GitHub un repositorio llamado `micine`.
-2. Sube `index.html` y `sw.js`.
-3. Ve a **Settings → Pages → Source: Deploy from a branch → main / (root)** y guarda.
-4. Al minuto queda en `https://TU_USUARIO.github.io/micine/`.
+## Cómo funciona
+- Las películas viven en la carpeta `Peliculas` de tu Google Drive.
+- Una **cuenta de servicio** de Google (un "robot") tiene acceso de solo lectura a esa carpeta, y a nada más.
+- El **Worker de Cloudflare** (`worker/worker.js`) revisa usuario y contraseña y entrega permisos de 1 hora para leer la carpeta.
+- El video se transmite directo desde Google al navegador.
 
-## 3. Usarla
-- Ábrela desde cualquier dispositivo, inicia sesión con Google y escribe el nombre de tu carpeta de películas en Drive (o pega su enlace).
-- Como la app está en modo "prueba", Google muestra el aviso "Google no verificó esta app". Toca **Continuar**: la app es tuya y solo lee tu Drive.
+## Administrar usuarios
+En Cloudflare → tu Worker `micine` → Settings → Variables and Secrets → edita `USERS`:
+```json
+{"jorge":"clave-jorge","mama":"clave-mama","pareja":"clave-pareja"}
+```
+Los nombres de usuario van en minúsculas. Si borras a alguien de la lista, pierde el acceso de inmediato.
 
-## Modos de reproducción
-- **Directo:** calidad original, subtítulos .srt automáticos y opción de seguir viendo donde quedaste. Funciona con MP4 y WebM (y con MKV en H.264 en Chrome o Edge).
-- **Reproductor de Drive:** Google convierte el video y lo reproduce en cualquier formato (MKV, AVI…) hasta 1080p. Se activa solo si el modo directo falla.
+## Configuración inicial (una sola vez)
+1. **Cuenta de servicio:** en Google Cloud Console → IAM y administración → Cuentas de servicio → Crear. Nómbrala `micine-lector` y no le asignes roles. Luego entra a ella → Claves → Agregar clave → JSON, y se descarga el archivo.
+2. **Compartir la carpeta:** en Drive, comparte `Peliculas` con el correo de la cuenta de servicio (`...@...iam.gserviceaccount.com`) como **Lector**.
+3. **Worker:** en dash.cloudflare.com → Workers & Pages → Create → Hello World. Nómbralo `micine`, presiona Deploy, después Edit code, pega `worker/worker.js` y vuelve a presionar Deploy.
+4. **Secretos del Worker** (Settings → Variables and Secrets, tipo *Secret*):
+   - `SA_JSON`: el contenido completo del .json descargado.
+   - `FOLDER_ID`: el ID de la carpeta (la última parte de su URL en Drive).
+   - `USERS`: la lista de usuarios (ver arriba).
+   - `SESSION_SECRET`: cualquier texto largo y aleatorio.
+5. Pega la URL del Worker en `index.html`, en `WORKER_URL`.
 
-## Subtítulos
-Pon el `.srt` en la misma carpeta que la película y con el mismo nombre de archivo, por ejemplo `Matrix (1999).mkv` + `Matrix (1999).es.srt`.
+## Formatos
+Funcionan **MP4 (H.264 + AAC)** y WebM en todos los dispositivos. Los MKV hay que convertirlos a MP4.
+Subtítulos: un `.srt` con el mismo nombre que la película, por ejemplo `Pelicula.mp4` + `Pelicula.es.srt`.
