@@ -244,9 +244,9 @@ function cardHTML(m){
   const h = hue(m.title);
   const img = posterOf(m);
   return `<div class="card" data-id="${m.id}">
-    <div class="poster${img ? " img" : ""}" style="background:${img ? `url('${img}')` : `linear-gradient(160deg,hsl(${h} 45% 32%),hsl(${(h + 40) % 360} 50% 14%))`};${img ? "background-size:cover;background-position:center" : ""}">${esc(m.title)}</div>
-    <div class="ttl">${img ? esc(m.title) : ""}</div>
-    <div class="meta"><span>${fmtDur(dur) || (metaOf(m)?.year || "")}</span><span>${fmtSize(m.size)}</span></div>
+    <div class="poster${img ? " img" : ""}" style="background:${img ? `url('${img}')` : `linear-gradient(160deg,hsl(${h} 45% 32%),hsl(${(h + 40) % 360} 50% 14%))`};${img ? "background-size:cover;background-position:center" : ""}">${esc(m.q)}</div>
+    <div class="ttl">${img ? esc(m.q) : ""}</div>
+    <div class="meta"><span>${[m.year || metaOf(m)?.year, fmtDur(dur)].filter(Boolean).join(" · ")}</span><span>${fmtSize(m.size)}</span></div>
     ${pct ? `<div class="prog" style="width:${pct}%"></div>` : ""}</div>`;
 }
 
