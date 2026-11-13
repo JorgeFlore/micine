@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mi Cine</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root{--bg:#0f1115;--card:#1a1d24;--card2:#232731;--txt:#e9ecf1;--mut:#9aa3b2;--acc:#e5484d;--rad:12px}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  header{position:sticky;top:0;z-index:5;display:flex;gap:12px;align-items:center;padding:14px 20px;background:rgba(15,17,21,.92);backdrop-filter:blur(8px);border-bottom:1px solid #222}
+  header h1{font-size:20px;margin:0 auto 0 0;letter-spacing:.5px}
+  header h1 span{color:var(--acc)}
+  input[type=search]{background:var(--card);border:1px solid #2c313c;color:var(--txt);border-radius:999px;padding:9px 16px;width:min(320px,45vw);font-size:14px}
+  button{background:var(--card2);color:var(--txt);border:1px solid #333a47;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer}
+  button:hover{border-color:#566}
+  button.pri{background:var(--acc);border-color:var(--acc);font-weight:600}
+  main{padding:20px;max-width:1400px;margin:0 auto}
+  .center{text-align:center;padding:60px 20px;color:var(--mut)}
+  .center h2{color:var(--txt)}
+  .center input{background:var(--card);border:1px solid #2c313c;color:var(--txt);border-radius:8px;padding:10px;width:min(480px,90vw);margin:10px 0}
+  h3.sec{margin:28px 0 12px;font-size:16px;color:var(--mut);font-weight:600}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:16px}
+  .card{background:var(--card);border-radius:var(--rad);overflow:hidden;cursor:pointer;transition:transform .15s;position:relative}
+  .card:hover{transform:translateY(-3px)}
+  .poster{aspect-ratio:2/3;display:flex;align-items:flex-end;padding:12px;font-weight:700;font-size:17px;line-height:1.2}
+  .meta{padding:8px 12px 12px;font-size:12px;color:var(--mut);display:flex;justify-content:space-between}
+  .prog{position:absolute;left:0;bottom:0;height:4px;background:var(--acc)}
+  #player{position:fixed;inset:0;background:#000;z-index:20;display:none;flex-direction:column}
+  #player.on{display:flex}
+  #pbar{display:flex;gap:10px;align-items:center;padding:10px 14px;background:#111}
+  #pbar .t{margin-right:auto;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #stage{flex:1;display:flex;align-items:center;justify-content:center;min-height:0}
+  #stage video,#stage iframe{width:100%;height:100%;border:0;background:#000}
+  .note{font-size:12px;color:var(--mut)}
+  select{background:var(--card2);color:var(--txt);border:1px solid #333a47;border-radius:8px;padding:7px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Mi <span>Cine</span></h1>
+  <input type="search" id="q" placeholder="Buscar película…" hidden>
+  <button id="btnFolder" hidden title="Cambiar carpeta">📁</button>
+  <button id="btnOut" hidden>Salir</button>
+</header>
+<main id="app"><div class="center">Cargando…</div></main>
+
+<div id="player">
+  <div id="pbar">
+    <button id="btnBack">← Volver</button>
+    <span class="t" id="ptitle"></span>
+    <select id="mode" title="Modo de reproducción">
+      <option value="direct">Directo (calidad original)</option>
+      <option value="drive">Reproductor de Drive</option>
+    </select>
+  </div>
+  <div id="stage"></div>
+</div>
+
+<script>
+/* ============ CONFIGURACIÓN ============ */
+const CLIENT_ID = "982900337866-4h57bovib98pjtuofbc2jbfln6tpf4vu.apps.googleusercontent.com";
+/* ======================================= */
+
+const SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+const API = "https://www.googleapis.com/drive/v3";
+const VIDEO_EXT = /\.(mp4|m4v|mkv|webm|avi|mov|wmv|mpg|mpeg|ts)$/i;
+const DIRECT_OK = /\.(mp4|m4v|webm)$/i;
+
+const $ = s => document.querySelector(s);
+const app = $("#app");
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem("micine:"+k); return v===null?d:JSON.parse(v);}catch{return d;} },
+  set(k, v){ try{ localStorage.setItem("micine:"+k, JSON.stringify(v)); }catch{} }
+};
+
+let token = null, tokenExp = 0, tokenClient = null, movies = [], current = null, swReady = null;
+
+/* ---------- Service worker (streaming con autorización) ---------- */
+if ("serviceWorker" in navigator) {
+  swReady = navigator.serviceWorker.register("sw.js").then(() => navigator.serviceWorker.ready).catch(e => { console.warn("SW", e); return null; });
+}
+navigator.serviceWorker?.addEventListener("message", async e => {
+  if (e.data?.type === "needToken" && e.ports[0]) {
+    try { await ensureToken(); } catch {}
+    e.ports[0].postMessage(token);
+  }
+});
+async function sendTokenToSW(){
+  const reg = swReady && await swReady;
+  const sw = reg && (reg.active || navigator.serviceWorker.controller);
+  if (sw) sw.postMessage({ type: "token", token });
+}
+
+/* ---------- Login con Google ---------- */
+function initAuth(){
+  if (CLIENT_ID.startsWith("PEGA_")) {
+    app.innerHTML = `<div class="center"><h2>Falta configurar</h2><p>Edita <b>index.html</b> y pega tu Client ID de Google en <code>CLIENT_ID</code>.</p></div>`;
+    return;
+  }
+  if (!window.google?.accounts?.oauth2) { setTimeout(initAuth, 200); return; }
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID, scope: SCOPE,
+    callback: async r => {
+      if (r.error) { showLogin("No se pudo iniciar sesión: " + r.error); return; }
+      token = r.access_token; tokenExp = Date.now() + (r.expires_in - 60) * 1000;
+      store.set("logged", true);
+      await sendTokenToSW();
+      if (pendingResolve) { pendingResolve(); pendingResolve = null; }
+      else start();
+    }
+  });
+  if (store.get("logged", false)) tokenClient.requestAccessToken({ prompt: "" });
+  else showLogin();
+}
+let pendingResolve = null;
+async function ensureToken(){
+  if (token && Date.now() < tokenExp) return;
+  await new Promise(res => { pendingResolve = res; tokenClient.requestAccessToken({ prompt: "" }); });
+}
+function showLogin(msg){
+  app.innerHTML = `<div class="center"><h2>Tus películas, desde tu Google Drive</h2>
+    <p>${msg ? msg : "Inicia sesión con la cuenta de Google donde tienes las películas."}</p>
+    <button class="pri" id="btnIn">Iniciar sesión con Google</button></div>`;
+  $("#btnIn").onclick = () => tokenClient.requestAccessToken({ prompt: "consent" });
+}
+$("#btnOut").onclick = () => {
+  if (token) google.accounts.oauth2.revoke(token, () => {});
+  token = null; store.set("logged", false); sendTokenToSW();
+  ["#q","#btnFolder","#btnOut"].forEach(s => $(s).hidden = true);
+  showLogin("Sesión cerrada.");
+};
+
+/* ---------- Drive API ---------- */
+async function api(path, params = {}){
+  await ensureToken();
+  const url = API + path + "?" + new URLSearchParams(params);
+  const r = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+  if (r.status === 401) { token = null; return api(path, params); }
+  if (!r.ok) throw new Error("Drive " + r.status + ": " + (await r.text()).slice(0, 200));
+  return r;
+}
+async function listChildren(folderId){
+  let out = [], pageToken;
+  do {
+    const p = { q: `'${folderId}' in parents and trashed=false`, pageSize: 1000,
+      fields: "nextPageToken,files(id,name,mimeType,size,modifiedTime,videoMediaMetadata(durationMillis,width,height))",
+      supportsAllDrives: true, includeItemsFromAllDrives: true };
+    if (pageToken) p.pageToken = pageToken;
+    const j = await (await api("/files", p)).json();
+    out.push(...j.files); pageToken = j.nextPageToken;
+  } while (pageToken);
+  return out;
+}
+async function findFolder(name){
+  const j = await (await api("/files", { q: `mimeType='application/vnd.google-apps.folder' and name='${name.replace(/'/g,"\\'")}' and trashed=false`, fields: "files(id,name)" })).json();
+  return j.files;
+}
+/* Recorre la carpeta y subcarpetas (hasta 4 niveles) */
+async function scan(folderId, depth = 0, acc = { videos: [], subs: [] }){
+  const items = await listChildren(folderId);
+  const sub = [];
+  for (const f of items) {
+    if (f.mimeType === "application/vnd.google-apps.folder") { if (depth < 4) sub.push(scan(f.id, depth + 1, acc)); }
+    else if (f.mimeType.startsWith("video/") || VIDEO_EXT.test(f.name)) acc.videos.push({ ...f, folder: folderId });
+    else if (/\.(srt|vtt)$/i.test(f.name)) acc.subs.push({ ...f, folder: folderId });
+  }
+  await Promise.all(sub);
+  return acc;
+}
+
+/* ---------- Biblioteca ---------- */
+function folderInput(msg){
+  app.innerHTML = `<div class="center"><h2>¿En qué carpeta de Drive están tus películas?</h2>
+    <p>${msg || "Escribe el nombre de la carpeta o pega su enlace de Drive."}</p>
+    <input id="fin" placeholder="Peliculas  o  https://drive.google.com/drive/folders/..."><br>
+    <button class="pri" id="fok">Usar esta carpeta</button></div>`;
+  $("#fok").onclick = async () => {
+    const v = $("#fin").value.trim(); if (!v) return;
+    const m = v.match(/folders\/([\w-]+)/) || v.match(/^([\w-]{25,})$/);
+    let id = m && m[1];
+    if (!id) {
+      const found = await findFolder(v);
+      if (!found.length) return folderInput(`No encontré una carpeta llamada "${v}".`);
+      id = found[0].id;
+    }
+    store.set("folder", id); start();
+  };
+}
+async function start(){
+  ["#q","#btnFolder","#btnOut"].forEach(s => $(s).hidden = false);
+  const folder = store.get("folder", null);
+  if (!folder) return folderInput();
+  app.innerHTML = `<div class="center">Leyendo tu carpeta de Drive…</div>`;
+  try {
+    const { videos, subs } = await scan(folder);
+    movies = videos.map(v => {
+      const base = v.name.replace(/\.[^.]+$/, "");
+      const sameFolderSubs = subs.filter(s => s.folder === v.folder);
+      const exact = sameFolderSubs.filter(s => s.name.toLowerCase().startsWith(base.toLowerCase()));
+      return { ...v, title: cleanTitle(base), subs: exact.length ? exact : (sameFolderSubs.length && videos.filter(x => x.folder === v.folder).length === 1 ? sameFolderSubs : []) };
+    }).sort((a, b) => a.title.localeCompare(b.title, "es"));
+    render();
+  } catch (e) {
+    console.error(e);
+    folderInput("No pude leer esa carpeta (" + e.message + "). Prueba con otra.");
+  }
+}
+function cleanTitle(s){
+  return s.replace(/[._]/g, " ")
+    .replace(/\b(1080p|720p|2160p|4k|x264|x265|h264|h265|hevc|bluray|brrip|webrip|web-dl|hdrip|dvdrip|aac|ac3|dts|latino|castellano|dual|subs?)\b.*$/i, "")
+    .replace(/\s+/g, " ").trim();
+}
+function hue(s){ let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+function fmtSize(b){ b = +b || 0; return b > 1e9 ? (b / 1e9).toFixed(1) + " GB" : (b / 1e6).toFixed(0) + " MB"; }
+function fmtDur(ms){ if (!ms) return ""; const m = Math.round(ms / 60000); return Math.floor(m / 60) + "h " + (m % 60) + "m"; }
+function esc(s){ return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function cardHTML(m){
+  const p = store.get("pos:" + m.id, null);
+  const dur = +m.videoMediaMetadata?.durationMillis || 0;
+  const pct = p && dur ? Math.min(100, p * 1000 / dur * 100) : 0;
+  const h = hue(m.title);
+  return `<div class="card" data-id="${m.id}">
+    <div class="poster" style="background:linear-gradient(160deg,hsl(${h} 45% 32%),hsl(${(h + 40) % 360} 50% 14%))">${esc(m.title)}</div>
+    <div class="meta"><span>${fmtDur(dur)}</span><span>${fmtSize(m.size)}</span></div>
+    ${pct ? `<div class="prog" style="width:${pct}%"></div>` : ""}</div>`;
+}
+function render(){
+  const q = $("#q").value.trim().toLowerCase();
+  const list = movies.filter(m => !q || m.title.toLowerCase().includes(q));
+  if (!movies.length) { app.innerHTML = `<div class="center"><h2>No encontré videos</h2><p>Sube películas a la carpeta o elige otra con 📁.</p></div>`; return; }
+  const cont = list.filter(m => store.get("pos:" + m.id, 0) > 60 && !store.get("done:" + m.id, false));
+  app.innerHTML =
+    (cont.length && !q ? `<h3 class="sec">Seguir viendo</h3><div class="grid">${cont.map(cardHTML).join("")}</div>` : "") +
+    `<h3 class="sec">${q ? "Resultados" : "Todas"} (${list.length})</h3><div class="grid">${list.map(cardHTML).join("")}</div>`;
+  app.querySelectorAll(".card").forEach(c => c.onclick = () => play(movies.find(m => m.id === c.dataset.id)));
+}
+$("#q").oninput = render;
+$("#btnFolder").onclick = () => { store.set("folder", null); folderInput(); };
+
+/* ---------- Reproductor ---------- */
+function srtToVtt(s){
+  return "WEBVTT\n\n" + s.replace(/\r/g, "").replace(/^\uFEFF/, "")
+    .replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2").replace(/^\d+\n(?=\d\d:)/gm, "");
+}
+async function play(m){
+  current = m;
+  $("#ptitle").textContent = m.title;
+  $("#mode").value = store.get("mode:" + m.id, DIRECT_OK.test(m.name) ? "direct" : "drive");
+  $("#player").classList.add("on");
+  try { await document.documentElement.requestFullscreen?.(); } catch {}
+  loadStage();
+}
+async function loadStage(){
+  const m = current, mode = $("#mode").value, stage = $("#stage");
+  saveNow(); stage.innerHTML = "";
+  if (mode === "drive") {
+    stage.innerHTML = `<iframe src="https://drive.google.com/file/d/${m.id}/preview" allow="autoplay; fullscreen" allowfullscreen></iframe>`;
+    return;
+  }
+  await ensureToken(); await sendTokenToSW();
+  const reg = swReady && await swReady;
+  if (!reg || !navigator.serviceWorker.controller) {
+    stage.innerHTML = `<div class="center">El modo directo necesita recargar la página una vez. <button onclick="location.reload()">Recargar</button></div>`;
+    return;
+  }
+  const v = document.createElement("video");
+  v.controls = true; v.autoplay = true; v.playsInline = true; v.crossOrigin = "anonymous";
+  v.src = "stream/" + m.id;
+  for (const s of m.subs) {
+    try {
+      const r = await api("/files/" + s.id, { alt: "media" });
+      let txt = await r.text();
+      if (/\.srt$/i.test(s.name)) txt = srtToVtt(txt);
+      const t = document.createElement("track");
+      t.kind = "subtitles"; t.label = s.name.replace(/\.[^.]+$/, "").replace(/^.*?[.\s_-]([a-z]{2,3})$/i, "$1") || "Subtítulos";
+      t.src = URL.createObjectURL(new Blob([txt], { type: "text/vtt" }));
+      if (!v.querySelector("track")) t.default = true;
+      v.appendChild(t);
+    } catch (e) { console.warn("subtítulo", e); }
+  }
+  const pos = store.get("pos:" + m.id, 0);
+  v.addEventListener("loadedmetadata", () => { if (pos > 10 && pos < v.duration - 30) v.currentTime = pos; }, { once: true });
+  v.addEventListener("timeupdate", () => { if (Math.floor(v.currentTime) % 5 === 0) saveNow(); });
+  v.addEventListener("ended", () => { store.set("done:" + m.id, true); store.set("pos:" + m.id, 0); });
+  v.addEventListener("error", () => {
+    stage.innerHTML = `<div class="center"><h2>Tu navegador no puede reproducir este archivo directo</h2>
+      <p>Pasa al <b>Reproductor de Drive</b>, que convierte el formato automáticamente.</p>
+      <button class="pri" onclick="document.querySelector('#mode').value='drive';loadStage()">Usar reproductor de Drive</button></div>`;
+  });
+  stage.appendChild(v);
+}
+function saveNow(){
+  const v = $("#stage video");
+  if (v && current && v.currentTime > 0) store.set("pos:" + current.id, Math.floor(v.currentTime));
+}
+$("#mode").onchange = () => { store.set("mode:" + current.id, $("#mode").value); loadStage(); };
+$("#btnBack").onclick = () => {
+  saveNow(); $("#stage").innerHTML = ""; $("#player").classList.remove("on");
+  if (document.fullscreenElement) document.exitFullscreen?.();
+  render();
+};
+window.addEventListener("pagehide", saveNow);
+
+initAuth();
+</script>
+</body>
+</html>
