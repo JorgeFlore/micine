@@ -9,11 +9,14 @@ Página: https://jorgeflore.github.io/micine/
 - El video se transmite directo desde Google al navegador.
 
 ## Administrar usuarios
-En Cloudflare → tu Worker `micine` → Settings → Variables and Secrets → edita `USERS`:
-```json
-{"jorge":"clave-jorge","mama":"clave-mama","pareja":"clave-pareja"}
-```
-Los nombres de usuario van en minúsculas. Si borras a alguien de la lista, pierde el acceso de inmediato.
+Desde la app, toca **👤 tu nombre** (arriba a la derecha) → sección **Usuarios**:
+- **Agregar:** nombre + contraseña (🎲 genera una). Te muestra un mensaje listo para copiar o enviar por WhatsApp.
+- **🔑 Clave:** cambia la contraseña de alguien y cierra sus sesiones abiertas.
+- **Eliminar:** borra al usuario y su avance; pierde el acceso al instante.
+Cada usuario puede cambiar su propia contraseña en el mismo menú.
+
+El administrador es el primer usuario de `USERS` (o los que pongas en la variable `ADMINS`, separados por coma).
+Los usuarios de `USERS` son "fijos" y solo se cambian en Cloudflare. Los demás se guardan en la base D1 (requiere el binding `DB`).
 
 ## Configuración inicial (una sola vez)
 1. **Cuenta de servicio:** en Google Cloud Console → IAM y administración → Cuentas de servicio → Crear. Nómbrala `micine-lector` y no le asignes roles. Luego entra a ella → Claves → Agregar clave → JSON, y se descarga el archivo.

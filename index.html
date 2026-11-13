@@ -19,7 +19,18 @@
   header{position:sticky;top:0;z-index:5;display:flex;gap:12px;align-items:center;padding:14px 20px;background:rgba(15,17,21,.92);backdrop-filter:blur(8px);border-bottom:1px solid #222}
   header h1{font-size:20px;margin:0 auto 0 0;letter-spacing:.5px}
   header h1 span{color:var(--acc)}
-  #who{color:var(--mut);font-size:13px}
+  #who{font-size:14px}
+  .ulist{display:flex;flex-direction:column;gap:8px;margin:12px 0 20px}
+  .urow{display:flex;align-items:center;gap:8px;background:var(--card2);border-radius:10px;padding:10px 12px;flex-wrap:wrap}
+  .urow .n{font-weight:600;margin-right:auto}
+  .tag{font-size:11px;border:1px solid #445;border-radius:4px;padding:1px 6px;color:var(--mut);margin-left:6px;font-weight:400}
+  .urow button{padding:5px 10px;font-size:13px}
+  .danger{border-color:#7a2f33 !important;color:#ff9a9d}
+  .acct input{background:var(--bg);border:1px solid #2c313c;color:var(--txt);border-radius:8px;padding:10px;font-size:15px;width:100%}
+  .acct .f{display:flex;gap:8px;margin:8px 0}
+  .acct h3{margin:18px 0 6px} .acct h2{margin:0 0 4px}
+  .share{background:var(--bg);border:1px dashed #445;border-radius:10px;padding:12px;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:14px;margin:10px 0}
+  .ok{color:#7fd88f;font-size:14px;min-height:1.2em}
   input[type=search]{background:var(--card);border:1px solid #2c313c;color:var(--txt);border-radius:999px;padding:9px 16px;width:min(320px,40vw);font-size:14px}
   button{background:var(--card2);color:var(--txt);border:1px solid #333a47;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer}
   button:hover{border-color:#566}
@@ -85,7 +96,7 @@
   #castBar input[type=range]{width:100%;accent-color:var(--acc)}
   #castBar button{padding:6px 10px}
   body.casting main{padding-bottom:120px}
-  @media (max-width:600px){#who{display:none} header{flex-wrap:wrap} input[type=search]{order:9;width:100%}
+  @media (max-width:600px){header{flex-wrap:wrap} input[type=search]{order:9;width:100%}
     .grid{grid-template-columns:repeat(3,1fr);gap:10px} .poster{font-size:13px;padding:8px} .meta{padding:6px 8px 8px;font-size:11px} .ttl{font-size:12px;padding:6px 8px 0}
     .hero{min-height:70vh;background-position:center top} .hero::after{background:linear-gradient(0deg,var(--bg) 0%,rgba(15,17,21,.75) 45%,rgba(15,17,21,.15) 100%)}
     .hero .hc{padding:24px 16px 28px;text-align:center;margin:0 auto} .hero .acts{justify-content:center} .hero p{font-size:14px}
@@ -97,9 +108,9 @@
 <header>
   <h1>Mi <span>Cine</span></h1>
   <input type="search" id="q" placeholder="Buscar película…" hidden>
-  <span id="who"></span>
+  <button id="who" hidden></button>
   <button id="btnInstall" class="pri" hidden>Instalar app</button>
-  <button id="btnOut" hidden>Salir</button>
+
 </header>
 <main id="app"><div class="center">Cargando…</div></main>
 <div id="info"><div class="box"></div></div>
@@ -164,11 +175,11 @@ async function ensureToken(){
   if (r.status === 401) { logout("Tu sesión expiró. Vuelve a entrar."); throw new Error("nologin"); }
   if (!r.ok) throw new Error(j.error || ("Servidor " + r.status));
   token = j.access_token; tokenExp = Date.now() + (j.expires_in - 60) * 1000;
-  folderId = j.folder; user = j.user;
+  folderId = j.folder; user = j.user; isAdmin = !!j.admin; isFixed = !!j.fixed;
   await sendTokenToSW();
 }
 function showLogin(msg){
-  ["#q","#btnOut"].forEach(s => $(s).hidden = true); $("#who").textContent = "";
+  ["#q","#who"].forEach(s => $(s).hidden = true);
   app.innerHTML = `<div class="center"><h2>Bienvenido a Mi Cine</h2>
     <form class="login" id="flogin" autocomplete="on">
       <input id="lu" name="username" placeholder="Usuario" autocomplete="username" autocapitalize="none" required>
@@ -195,7 +206,104 @@ function logout(msg){
   store.set("session", null); token = null; tokenExp = 0; sendTokenToSW();
   showLogin(msg);
 }
-$("#btnOut").onclick = () => logout("Sesión cerrada.");
+/* ---------- Mi cuenta y administración de usuarios ---------- */
+let isAdmin = false, isFixed = false;
+$("#who").onclick = () => showAccount();
+async function wapi(path, opts = {}){
+  const r = await fetch(WORKER_URL + path, { ...opts, headers: { "Content-Type": "application/json",
+    Authorization: "Bearer " + store.get("session", ""), ...(opts.headers || {}) } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ("Error " + r.status));
+  return j;
+}
+function genPass(){
+  const w = ["sol","luna","rio","mar","nube","pino","faro","lago","roca","ola","tigre","puma","cielo","isla"];
+  const a = crypto.getRandomValues(new Uint32Array(3));
+  return w[a[0] % w.length] + "-" + w[a[1] % w.length] + "-" + (100 + a[2] % 900);
+}
+function closeInfo(){ $("#info").classList.remove("on"); }
+async function showAccount(){
+  const box = $("#info .box");
+  box.innerHTML = `<div class="acct" style="width:100%">
+    <h2>👤 ${esc(user)}</h2><div class="sub" style="color:var(--mut)">${isAdmin ? "Administrador" : "Usuario"}</div>
+    ${isFixed ? "" : `<h3>Cambiar mi contraseña</h3>
+      <div class="f"><input type="password" id="aOld" placeholder="Contraseña actual" autocomplete="current-password"></div>
+      <div class="f"><input type="password" id="aNew" placeholder="Contraseña nueva (mín. 6)" autocomplete="new-password"><button id="aSave">Guardar</button></div>
+      <div class="ok" id="aMsg"></div>`}
+    ${isAdmin ? `<h3>Usuarios</h3><div class="ulist" id="uList"><div style="color:var(--mut)">Cargando…</div></div>
+      <h3>Agregar usuario</h3>
+      <div class="f"><input id="nName" placeholder="Nombre (ej: mama)" autocapitalize="none" autocomplete="off"></div>
+      <div class="f"><input id="nPass" placeholder="Contraseña" autocomplete="off"><button id="nGen" title="Generar una">🎲</button></div>
+      <button class="pri" id="nAdd">Agregar</button><div class="err" id="nMsg"></div><div id="nShare"></div>` : ""}
+    <div class="acts" style="margin-top:18px"><button class="danger" id="aOut">Cerrar sesión</button><button id="aClose">Cerrar</button></div>
+  </div>`;
+  $("#info").classList.add("on");
+  $("#aClose").onclick = closeInfo;
+  $("#aOut").onclick = () => { closeInfo(); logout("Sesión cerrada."); };
+  if (!isFixed) $("#aSave").onclick = async () => {
+    $("#aMsg").className = "ok"; $("#aMsg").textContent = "Guardando…";
+    try {
+      const j = await wapi("/me/password", { method: "POST", body: JSON.stringify({ old: $("#aOld").value, pass: $("#aNew").value }) });
+      store.set("session", j.session); $("#aOld").value = $("#aNew").value = "";
+      $("#aMsg").textContent = "✓ Contraseña cambiada. Se cerró la sesión en tus otros dispositivos.";
+    } catch (e) { $("#aMsg").className = "err"; $("#aMsg").textContent = e.message; }
+  };
+  if (!isAdmin) return;
+  $("#nGen").onclick = () => { $("#nPass").value = genPass(); };
+  $("#nAdd").onclick = async () => {
+    const name = $("#nName").value.trim().toLowerCase(), pass = $("#nPass").value;
+    $("#nMsg").textContent = ""; $("#nShare").innerHTML = "";
+    try {
+      await wapi("/admin/users", { method: "POST", body: JSON.stringify({ name, pass }) });
+      $("#nName").value = $("#nPass").value = "";
+      shareCard($("#nShare"), name, pass, "✓ Usuario creado. Envíale esto:");
+      loadUsers();
+    } catch (e) { $("#nMsg").textContent = e.message; }
+  };
+  loadUsers();
+}
+function shareCard(el, name, pass, title){
+  const txt = `🍿 Mi Cine\nhttps://jorgeflore.github.io/micine/\nUsuario: ${name}\nContraseña: ${pass}`;
+  el.innerHTML = `<div class="ok">${esc(title)}</div><div class="share">${esc(txt)}</div>
+    <div class="f"><button class="cp">📋 Copiar</button>
+    <a href="https://wa.me/?text=${encodeURIComponent(txt)}" target="_blank" rel="noopener"><button>WhatsApp</button></a></div>`;
+  el.querySelector(".cp").onclick = async e => {
+    try { await navigator.clipboard.writeText(txt); e.target.textContent = "✓ Copiado"; } catch { e.target.textContent = "Selecciona y copia"; }
+  };
+}
+async function loadUsers(){
+  const el = $("#uList");
+  try {
+    const list = await wapi("/admin/users");
+    el.innerHTML = list.map(u => `<div class="urow" data-n="${esc(u.name)}">
+      <span class="n">${esc(u.name)}${u.admin ? '<span class="tag">admin</span>' : ""}${u.fixed ? '<span class="tag">fijo</span>' : ""}</span>
+      ${u.fixed ? "" : `<button class="pw">🔑 Clave</button><button class="del danger">Eliminar</button>`}
+      <div class="slot" style="width:100%"></div></div>`).join("");
+    el.querySelectorAll(".urow").forEach(row => {
+      const n = row.dataset.n, slot = row.querySelector(".slot");
+      const pw = row.querySelector(".pw"), del = row.querySelector(".del");
+      if (pw) pw.onclick = () => {
+        slot.innerHTML = `<div class="f"><input class="np" placeholder="Nueva contraseña" value="${genPass()}"><button class="sv">Guardar</button></div><div class="err m"></div><div class="sh"></div>`;
+        slot.querySelector(".sv").onclick = async () => {
+          const pass = slot.querySelector(".np").value;
+          try {
+            await wapi("/admin/users/" + encodeURIComponent(n) + "/password", { method: "POST", body: JSON.stringify({ pass }) });
+            slot.innerHTML = ""; shareCard(slot, n, pass, "✓ Clave cambiada (se cerró su sesión en todos lados). Envíale esto:");
+          } catch (e) { slot.querySelector(".m").textContent = e.message; }
+        };
+      };
+      if (del) del.onclick = () => {
+        slot.innerHTML = `<div class="f" style="align-items:center"><span style="margin-right:auto">¿Eliminar a <b>${esc(n)}</b> y su avance?</span>
+          <button class="danger y">Sí, eliminar</button><button class="no">No</button></div>`;
+        slot.querySelector(".no").onclick = () => { slot.innerHTML = ""; };
+        slot.querySelector(".y").onclick = async () => {
+          try { await wapi("/admin/users/" + encodeURIComponent(n), { method: "DELETE" }); loadUsers(); }
+          catch (e) { slot.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+        };
+      };
+    });
+  } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
 
 /* ---------- Drive API ---------- */
 async function api(path, params = {}, retry = true){
@@ -239,7 +347,7 @@ async function start(){
   app.innerHTML = `<div class="center">Cargando tus películas…</div>`;
   try {
     await ensureToken();
-    ["#q","#btnOut"].forEach(s => $(s).hidden = false);
+    ["#q","#who"].forEach(s => $(s).hidden = false);
     $("#who").textContent = "👤 " + user;
     const { videos, subs, imgs } = await scan(folderId);
     movies = videos.map(v => {

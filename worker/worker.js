@@ -8,6 +8,8 @@
 //   USERS           {"jorge":"clave1","mama":"clave2"}  (usuario en minúsculas)
 //   SESSION_SECRET  texto largo y aleatorio (firma las sesiones)
 //   TMDB_KEY        (opcional) clave API o token de lectura de themoviedb.org, para carátulas
+//   ADMINS          (opcional) administradores separados por coma; por defecto, el primer usuario de USERS
+// Los usuarios de USERS son fijos. Los demás se crean desde el panel "Usuarios" de la app (se guardan en D1).
 // Bindings (Settings → Bindings):
 //   DB              (opcional) base de datos D1 para sincronizar "Seguir viendo" entre dispositivos
 
@@ -21,7 +23,7 @@ export default {
     const cors = {
       "Access-Control-Allow-Origin": ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
-      "Access-Control-Allow-Methods": "GET, POST, HEAD, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, DELETE, HEAD, OPTIONS",
       "Vary": "Origin",
     };
     const json = (o, status = 200) =>
@@ -42,19 +44,89 @@ export default {
       if (pathname === "/login" && req.method === "POST") {
         const { user, pass } = await req.json();
         const u = String(user || "").trim().toLowerCase();
-        const ok = Object.hasOwn(users, u) && (await safeEqual(String(users[u]), String(pass || "")));
+        let ok = false, v = 0;
+        if (Object.hasOwn(users, u)) ok = await safeEqual(String(users[u]), String(pass || ""));
+        else {
+          const row = await dbUser(env, u, true);
+          if (row) { ok = await safeEqual(row.hash, await hashPass(String(pass || ""), row.salt)); v = row.ver; }
+        }
         if (!ok) {
           await new Promise(r => setTimeout(r, 800)); // frena intentos por fuerza bruta
           return json({ error: "Usuario o contraseña incorrectos" }, 401);
         }
-        const session = await signSession({ u, exp: Date.now() + SESSION_DAYS * 864e5 }, env.SESSION_SECRET);
+        const session = await signSession({ u, v, exp: Date.now() + SESSION_DAYS * 864e5 }, env.SESSION_SECRET);
         return json({ session, user: u });
       }
 
       const s = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/, "");
       const data = await verifySession(s, env.SESSION_SECRET);
-      // Si borras a alguien de USERS, pierde el acceso de inmediato.
-      const authed = data && Object.hasOwn(users, data.u);
+      // Si borras a alguien o le cambias la clave, sus sesiones dejan de valer de inmediato.
+      const authed = data && await userValid(env, users, data.u, data.v);
+      const admins = (env.ADMINS || Object.keys(users)[0] || "").split(",").map(x => x.trim().toLowerCase());
+      const isAdmin = authed && admins.includes(data.u);
+
+      /* ----- Panel de usuarios ----- */
+      if (pathname.startsWith("/admin/users")) {
+        if (!isAdmin) return json({ error: "Solo el administrador puede hacer esto" }, 403);
+        const db = await appDb(env);
+        if (!db) return json({ error: "Falta conectar la base de datos DB en Cloudflare" }, 501);
+        const name = decodeURIComponent(pathname.split("/")[3] || "").toLowerCase();
+        const action = pathname.split("/")[4] || "";
+        if (req.method === "GET" && !name) {
+          const { results } = await db.prepare("SELECT name, created FROM users ORDER BY name").all();
+          return json([
+            ...Object.keys(users).map(n => ({ name: n, fixed: true, admin: admins.includes(n) })),
+            ...results.map(r => ({ name: r.name, created: r.created, fixed: false, admin: admins.includes(r.name) })),
+          ]);
+        }
+        if (req.method === "POST" && !name) {
+          const { name: nn, pass } = await req.json();
+          const n = String(nn || "").trim().toLowerCase();
+          if (!/^[a-z0-9._-]{2,24}$/.test(n)) return json({ error: "Nombre inválido: usa 2 a 24 letras minúsculas, números, punto, guion o guion bajo, sin espacios" }, 400);
+          if (String(pass || "").length < 6) return json({ error: "La contraseña debe tener al menos 6 caracteres" }, 400);
+          if (Object.hasOwn(users, n) || await dbUser(env, n, true)) return json({ error: "Ese usuario ya existe" }, 409);
+          const salt = randomHex(16);
+          await db.prepare("INSERT INTO users (name, salt, hash, ver, created) VALUES (?1, ?2, ?3, 1, ?4)")
+            .bind(n, salt, await hashPass(String(pass), salt), Date.now()).run();
+          return json({ ok: true, name: n });
+        }
+        if (name && Object.hasOwn(users, name))
+          return json({ error: "Este usuario es fijo (está en USERS en Cloudflare) y solo se cambia allá" }, 400);
+        if (name && req.method === "DELETE") {
+          await db.batch([db.prepare("DELETE FROM users WHERE name = ?1").bind(name),
+                          db.prepare("DELETE FROM progress WHERE user = ?1").bind(name)]);
+          userCache.delete(name);
+          return json({ ok: true });
+        }
+        if (name && action === "password" && req.method === "POST") {
+          const { pass } = await req.json();
+          if (String(pass || "").length < 6) return json({ error: "La contraseña debe tener al menos 6 caracteres" }, 400);
+          const salt = randomHex(16);
+          const r = await db.prepare("UPDATE users SET salt = ?2, hash = ?3, ver = ver + 1 WHERE name = ?1")
+            .bind(name, salt, await hashPass(String(pass), salt)).run();
+          userCache.delete(name);
+          if (!r.meta?.changes) return json({ error: "No existe ese usuario" }, 404);
+          return json({ ok: true });
+        }
+        return json({ error: "No encontrado" }, 404);
+      }
+
+      /* ----- Cambiar mi propia contraseña ----- */
+      if (pathname === "/me/password" && req.method === "POST") {
+        if (!authed) return json({ error: "Sesión inválida" }, 401);
+        if (Object.hasOwn(users, data.u)) return json({ error: "Tu usuario es fijo; la clave se cambia en Cloudflare (USERS)" }, 400);
+        const { old, pass } = await req.json();
+        const row = await dbUser(env, data.u, true);
+        if (!row || !(await safeEqual(row.hash, await hashPass(String(old || ""), row.salt))))
+          return json({ error: "La contraseña actual no es correcta" }, 400);
+        if (String(pass || "").length < 6) return json({ error: "La contraseña nueva debe tener al menos 6 caracteres" }, 400);
+        const salt = randomHex(16);
+        await (await appDb(env)).prepare("UPDATE users SET salt = ?2, hash = ?3, ver = ver + 1 WHERE name = ?1")
+          .bind(data.u, salt, await hashPass(String(pass), salt)).run();
+        userCache.delete(data.u);
+        const session = await signSession({ u: data.u, v: row.ver + 1, exp: Date.now() + SESSION_DAYS * 864e5 }, env.SESSION_SECRET);
+        return json({ ok: true, session });
+      }
 
       if (pathname === "/meta") {
         if (!authed) return json({ error: "Sesión inválida" }, 401);
@@ -74,7 +146,7 @@ export default {
       /* ----- Avance sincronizado (D1) ----- */
       if (pathname === "/progress") {
         if (!authed) return json({ error: "Sesión inválida" }, 401);
-        const db = await progressDb(env);
+        const db = await appDb(env);
         if (!db) return json({ error: "Falta la base de datos DB" }, 501);
         if (req.method === "POST") {
           const items = [].concat(await req.json()).slice(0, 50);
@@ -95,7 +167,7 @@ export default {
         const id = url.searchParams.get("id") || "";
         const subs = (url.searchParams.get("subs") || "").split(",").filter(Boolean);
         if (!/^[\w-]+$/.test(id) || !subs.every(x => /^[\w-]+$/.test(x))) return json({ error: "ID inválido" }, 400);
-        const t = await signSession({ u: data.u, c: [id, ...subs], exp: Date.now() + 8 * 3600e3 }, env.SESSION_SECRET);
+        const t = await signSession({ u: data.u, v: data.v, c: [id, ...subs], exp: Date.now() + 8 * 3600e3 }, env.SESSION_SECRET);
         const base = url.origin;
         return json({
           video: `${base}/cast/${id}?t=${t}`,
@@ -107,7 +179,7 @@ export default {
         const [, kind, id] = castMatch;
         const open = { "Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges" };
         const ct = await verifySession(url.searchParams.get("t") || "", env.SESSION_SECRET);
-        if (!ct || !Array.isArray(ct.c) || !ct.c.includes(id) || !Object.hasOwn(users, ct.u))
+        if (!ct || !Array.isArray(ct.c) || !ct.c.includes(id) || !(await userValid(env, users, ct.u, ct.v)))
           return new Response("Enlace vencido", { status: 403, headers: open });
         const g = await googleToken(env);
         const headers = { Authorization: "Bearer " + g.token };
@@ -136,6 +208,8 @@ export default {
           expires_in: Math.floor((t.exp - Date.now()) / 1000),
           folder: env.FOLDER_ID,
           user: data.u,
+          admin: isAdmin,
+          fixed: Object.hasOwn(users, data.u),
         });
       }
 
@@ -146,19 +220,48 @@ export default {
   },
 };
 
-/* ---------- Base de datos del avance ---------- */
+/* ---------- Base de datos (avance y usuarios) ---------- */
 let dbReady = false;
-async function progressDb(env) {
+async function appDb(env) {
   if (!env.DB) return null;
   if (!dbReady) {
-    await env.DB.prepare(
-      `CREATE TABLE IF NOT EXISTS progress (
+    await env.DB.batch([
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS progress (
          user TEXT NOT NULL, id TEXT NOT NULL, pos INTEGER NOT NULL DEFAULT 0,
-         done INTEGER NOT NULL DEFAULT 0, t INTEGER NOT NULL, PRIMARY KEY (user, id))`
-    ).run();
+         done INTEGER NOT NULL DEFAULT 0, t INTEGER NOT NULL, PRIMARY KEY (user, id))`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS users (
+         name TEXT PRIMARY KEY, salt TEXT NOT NULL, hash TEXT NOT NULL,
+         ver INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL)`),
+    ]);
     dbReady = true;
   }
   return env.DB;
+}
+
+/* ---------- Usuarios creados desde la app ---------- */
+const userCache = new Map(); // nombre → { row, at }
+async function dbUser(env, name, fresh = false) {
+  const c = userCache.get(name);
+  if (!fresh && c && Date.now() - c.at < 30e3) return c.row;
+  const db = await appDb(env);
+  const row = db ? await db.prepare("SELECT name, salt, hash, ver FROM users WHERE name = ?1").bind(name).first() : null;
+  userCache.set(name, { row, at: Date.now() });
+  return row;
+}
+async function userValid(env, users, name, ver) {
+  if (!name) return false;
+  if (Object.hasOwn(users, name)) return true;
+  const row = await dbUser(env, name);
+  return !!row && row.ver === (ver || 0);
+}
+async function hashPass(pass, saltHex) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveBits"]);
+  const salt = Uint8Array.from(saltHex.match(/../g), h => parseInt(h, 16));
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 20000 }, key, 256);
+  return [...new Uint8Array(bits)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+function randomHex(n) {
+  return [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, "0")).join("");
 }
 function srtToVtt(s) {
   return "WEBVTT\n\n" + s.replace(/\r/g, "").replace(/^\uFEFF/, "")
