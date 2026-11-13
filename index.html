@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f1115">
 <title>Mi Cine</title>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root{--bg:#0f1115;--card:#1a1d24;--card2:#232731;--txt:#e9ecf1;--mut:#9aa3b2;--acc:#e5484d;--rad:12px}
   *{box-sizing:border-box}
@@ -12,16 +12,19 @@
   header{position:sticky;top:0;z-index:5;display:flex;gap:12px;align-items:center;padding:14px 20px;background:rgba(15,17,21,.92);backdrop-filter:blur(8px);border-bottom:1px solid #222}
   header h1{font-size:20px;margin:0 auto 0 0;letter-spacing:.5px}
   header h1 span{color:var(--acc)}
-  input[type=search]{background:var(--card);border:1px solid #2c313c;color:var(--txt);border-radius:999px;padding:9px 16px;width:min(320px,45vw);font-size:14px}
+  #who{color:var(--mut);font-size:13px}
+  input[type=search]{background:var(--card);border:1px solid #2c313c;color:var(--txt);border-radius:999px;padding:9px 16px;width:min(320px,40vw);font-size:14px}
   button{background:var(--card2);color:var(--txt);border:1px solid #333a47;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer}
   button:hover{border-color:#566}
   button.pri{background:var(--acc);border-color:var(--acc);font-weight:600}
   main{padding:20px;max-width:1400px;margin:0 auto}
   .center{text-align:center;padding:60px 20px;color:var(--mut)}
   .center h2{color:var(--txt)}
-  .center input{background:var(--card);border:1px solid #2c313c;color:var(--txt);border-radius:8px;padding:10px;width:min(480px,90vw);margin:10px 0}
+  form.login{display:flex;flex-direction:column;gap:12px;width:min(340px,90vw);margin:24px auto 0}
+  form.login input{background:var(--card);border:1px solid #2c313c;color:var(--txt);border-radius:8px;padding:12px;font-size:16px}
+  .err{color:#ff8a8d;min-height:1.2em;font-size:14px}
   h3.sec{margin:28px 0 12px;font-size:16px;color:var(--mut);font-weight:600}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:16px}
   .card{background:var(--card);border-radius:var(--rad);overflow:hidden;cursor:pointer;transition:transform .15s;position:relative}
   .card:hover{transform:translateY(-3px)}
   .poster{aspect-ratio:2/3;display:flex;align-items:flex-end;padding:12px;font-weight:700;font-size:17px;line-height:1.2}
@@ -30,18 +33,17 @@
   #player{position:fixed;inset:0;background:#000;z-index:20;display:none;flex-direction:column}
   #player.on{display:flex}
   #pbar{display:flex;gap:10px;align-items:center;padding:10px 14px;background:#111}
-  #pbar .t{margin-right:auto;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #pbar .t{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #stage{flex:1;display:flex;align-items:center;justify-content:center;min-height:0}
-  #stage video,#stage iframe{width:100%;height:100%;border:0;background:#000}
-  .note{font-size:12px;color:var(--mut)}
-  select{background:var(--card2);color:var(--txt);border:1px solid #333a47;border-radius:8px;padding:7px}
+  #stage video{width:100%;height:100%;background:#000}
+  @media (max-width:600px){#who{display:none} header{flex-wrap:wrap} input[type=search]{order:9;width:100%}}
 </style>
 </head>
 <body>
 <header>
   <h1>Mi <span>Cine</span></h1>
   <input type="search" id="q" placeholder="Buscar película…" hidden>
-  <button id="btnFolder" hidden title="Cambiar carpeta">📁</button>
+  <span id="who"></span>
   <button id="btnOut" hidden>Salir</button>
 </header>
 <main id="app"><div class="center">Cargando…</div></main>
@@ -50,23 +52,17 @@
   <div id="pbar">
     <button id="btnBack">← Volver</button>
     <span class="t" id="ptitle"></span>
-    <select id="mode" title="Modo de reproducción">
-      <option value="direct">Directo (calidad original)</option>
-      <option value="drive">Reproductor de Drive</option>
-    </select>
   </div>
   <div id="stage"></div>
 </div>
 
 <script>
 /* ============ CONFIGURACIÓN ============ */
-const CLIENT_ID = "982900337866-4h57bovib98pjtuofbc2jbfln6tpf4vu.apps.googleusercontent.com";
+const WORKER_URL = "https://micine.koke-17-21.workers.dev"; // ej: https://micine.tu-cuenta.workers.dev
 /* ======================================= */
 
-const SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const API = "https://www.googleapis.com/drive/v3";
 const VIDEO_EXT = /\.(mp4|m4v|mkv|webm|avi|mov|wmv|mpg|mpeg|ts)$/i;
-const DIRECT_OK = /\.(mp4|m4v|webm)$/i;
 
 const $ = s => document.querySelector(s);
 const app = $("#app");
@@ -75,12 +71,12 @@ const store = {
   set(k, v){ try{ localStorage.setItem("micine:"+k, JSON.stringify(v)); }catch{} }
 };
 
-let token = null, tokenExp = 0, tokenClient = null, movies = [], current = null, swReady = null;
+let token = null, tokenExp = 0, folderId = null, user = null, movies = [], current = null;
 
 /* ---------- Service worker (streaming con autorización) ---------- */
-if ("serviceWorker" in navigator) {
-  swReady = navigator.serviceWorker.register("sw.js").then(() => navigator.serviceWorker.ready).catch(e => { console.warn("SW", e); return null; });
-}
+const swReady = "serviceWorker" in navigator
+  ? navigator.serviceWorker.register("sw.js").then(() => navigator.serviceWorker.ready).catch(e => { console.warn("SW", e); return null; })
+  : Promise.resolve(null);
 navigator.serviceWorker?.addEventListener("message", async e => {
   if (e.data?.type === "needToken" && e.ports[0]) {
     try { await ensureToken(); } catch {}
@@ -88,64 +84,67 @@ navigator.serviceWorker?.addEventListener("message", async e => {
   }
 });
 async function sendTokenToSW(){
-  const reg = swReady && await swReady;
+  const reg = await swReady;
   const sw = reg && (reg.active || navigator.serviceWorker.controller);
   if (sw) sw.postMessage({ type: "token", token });
 }
 
-/* ---------- Login con Google ---------- */
-function initAuth(){
-  if (CLIENT_ID.startsWith("PEGA_")) {
-    app.innerHTML = `<div class="center"><h2>Falta configurar</h2><p>Edita <b>index.html</b> y pega tu Client ID de Google en <code>CLIENT_ID</code>.</p></div>`;
-    return;
-  }
-  if (!window.google?.accounts?.oauth2) { setTimeout(initAuth, 200); return; }
-  tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: CLIENT_ID, scope: SCOPE,
-    callback: async r => {
-      if (r.error) { showLogin("No se pudo iniciar sesión: " + r.error); return; }
-      token = r.access_token; tokenExp = Date.now() + (r.expires_in - 60) * 1000;
-      store.set("logged", true);
-      await sendTokenToSW();
-      if (pendingResolve) { pendingResolve(); pendingResolve = null; }
-      else start();
-    }
-  });
-  if (store.get("logged", false)) tokenClient.requestAccessToken({ prompt: "" });
-  else showLogin();
-}
-let pendingResolve = null;
+/* ---------- Sesión con usuario propio ---------- */
 async function ensureToken(){
   if (token && Date.now() < tokenExp) return;
-  await new Promise(res => { pendingResolve = res; tokenClient.requestAccessToken({ prompt: "" }); });
+  const session = store.get("session", null);
+  if (!session) { showLogin(); throw new Error("nologin"); }
+  const r = await fetch(WORKER_URL + "/token", { headers: { Authorization: "Bearer " + session } });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401) { logout("Tu sesión expiró. Vuelve a entrar."); throw new Error("nologin"); }
+  if (!r.ok) throw new Error(j.error || ("Servidor " + r.status));
+  token = j.access_token; tokenExp = Date.now() + (j.expires_in - 60) * 1000;
+  folderId = j.folder; user = j.user;
+  await sendTokenToSW();
 }
 function showLogin(msg){
-  app.innerHTML = `<div class="center"><h2>Tus películas, desde tu Google Drive</h2>
-    <p>${msg ? msg : "Inicia sesión con la cuenta de Google donde tienes las películas."}</p>
-    <button class="pri" id="btnIn">Iniciar sesión con Google</button></div>`;
-  $("#btnIn").onclick = () => tokenClient.requestAccessToken({ prompt: "consent" });
+  ["#q","#btnOut"].forEach(s => $(s).hidden = true); $("#who").textContent = "";
+  app.innerHTML = `<div class="center"><h2>Bienvenido a Mi Cine</h2>
+    <form class="login" id="flogin" autocomplete="on">
+      <input id="lu" name="username" placeholder="Usuario" autocomplete="username" autocapitalize="none" required>
+      <input id="lp" name="password" type="password" placeholder="Contraseña" autocomplete="current-password" required>
+      <button class="pri" type="submit">Entrar</button>
+      <div class="err" id="lerr">${msg || ""}</div>
+    </form></div>`;
+  $("#flogin").onsubmit = async e => {
+    e.preventDefault();
+    $("#lerr").textContent = "Entrando…";
+    try {
+      const r = await fetch(WORKER_URL + "/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user: $("#lu").value, pass: $("#lp").value })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { $("#lerr").textContent = j.error || "No se pudo entrar"; return; }
+      store.set("session", j.session);
+      start();
+    } catch { $("#lerr").textContent = "No hay conexión con el servidor."; }
+  };
 }
-$("#btnOut").onclick = () => {
-  if (token) google.accounts.oauth2.revoke(token, () => {});
-  token = null; store.set("logged", false); sendTokenToSW();
-  ["#q","#btnFolder","#btnOut"].forEach(s => $(s).hidden = true);
-  showLogin("Sesión cerrada.");
-};
+function logout(msg){
+  store.set("session", null); token = null; tokenExp = 0; sendTokenToSW();
+  showLogin(msg);
+}
+$("#btnOut").onclick = () => logout("Sesión cerrada.");
 
 /* ---------- Drive API ---------- */
-async function api(path, params = {}){
+async function api(path, params = {}, retry = true){
   await ensureToken();
-  const url = API + path + "?" + new URLSearchParams(params);
-  const r = await fetch(url, { headers: { Authorization: "Bearer " + token } });
-  if (r.status === 401) { token = null; return api(path, params); }
+  const r = await fetch(API + path + "?" + new URLSearchParams(params), { headers: { Authorization: "Bearer " + token } });
+  if (r.status === 401 && retry) { token = null; return api(path, params, false); }
   if (!r.ok) throw new Error("Drive " + r.status + ": " + (await r.text()).slice(0, 200));
   return r;
 }
-async function listChildren(folderId){
+async function listChildren(id){
   let out = [], pageToken;
   do {
-    const p = { q: `'${folderId}' in parents and trashed=false`, pageSize: 1000,
-      fields: "nextPageToken,files(id,name,mimeType,size,modifiedTime,videoMediaMetadata(durationMillis,width,height))",
+    const p = { q: `'${id}' in parents and trashed=false`, pageSize: 1000,
+      fields: "nextPageToken,files(id,name,mimeType,size,videoMediaMetadata(durationMillis))",
       supportsAllDrives: true, includeItemsFromAllDrives: true };
     if (pageToken) p.pageToken = pageToken;
     const j = await (await api("/files", p)).json();
@@ -153,58 +152,42 @@ async function listChildren(folderId){
   } while (pageToken);
   return out;
 }
-async function findFolder(name){
-  const j = await (await api("/files", { q: `mimeType='application/vnd.google-apps.folder' and name='${name.replace(/'/g,"\\'")}' and trashed=false`, fields: "files(id,name)" })).json();
-  return j.files;
-}
-/* Recorre la carpeta y subcarpetas (hasta 4 niveles) */
-async function scan(folderId, depth = 0, acc = { videos: [], subs: [] }){
-  const items = await listChildren(folderId);
-  const sub = [];
+async function scan(id, depth = 0, acc = { videos: [], subs: [] }){
+  const items = await listChildren(id), sub = [];
   for (const f of items) {
     if (f.mimeType === "application/vnd.google-apps.folder") { if (depth < 4) sub.push(scan(f.id, depth + 1, acc)); }
-    else if (f.mimeType.startsWith("video/") || VIDEO_EXT.test(f.name)) acc.videos.push({ ...f, folder: folderId });
-    else if (/\.(srt|vtt)$/i.test(f.name)) acc.subs.push({ ...f, folder: folderId });
+    else if (f.mimeType.startsWith("video/") || VIDEO_EXT.test(f.name)) acc.videos.push({ ...f, folder: id });
+    else if (/\.(srt|vtt)$/i.test(f.name)) acc.subs.push({ ...f, folder: id });
   }
   await Promise.all(sub);
   return acc;
 }
 
 /* ---------- Biblioteca ---------- */
-function folderInput(msg){
-  app.innerHTML = `<div class="center"><h2>¿En qué carpeta de Drive están tus películas?</h2>
-    <p>${msg || "Escribe el nombre de la carpeta o pega su enlace de Drive."}</p>
-    <input id="fin" placeholder="Peliculas  o  https://drive.google.com/drive/folders/..."><br>
-    <button class="pri" id="fok">Usar esta carpeta</button></div>`;
-  $("#fok").onclick = async () => {
-    const v = $("#fin").value.trim(); if (!v) return;
-    const m = v.match(/folders\/([\w-]+)/) || v.match(/^([\w-]{25,})$/);
-    let id = m && m[1];
-    if (!id) {
-      const found = await findFolder(v);
-      if (!found.length) return folderInput(`No encontré una carpeta llamada "${v}".`);
-      id = found[0].id;
-    }
-    store.set("folder", id); start();
-  };
-}
 async function start(){
-  ["#q","#btnFolder","#btnOut"].forEach(s => $(s).hidden = false);
-  const folder = store.get("folder", null);
-  if (!folder) return folderInput();
-  app.innerHTML = `<div class="center">Leyendo tu carpeta de Drive…</div>`;
+  if (WORKER_URL.startsWith("PEGA_")) {
+    app.innerHTML = `<div class="center"><h2>Falta configurar</h2><p>Pega la URL del Worker en <code>WORKER_URL</code> dentro de index.html.</p></div>`;
+    return;
+  }
+  if (!store.get("session", null)) return showLogin();
+  app.innerHTML = `<div class="center">Cargando tus películas…</div>`;
   try {
-    const { videos, subs } = await scan(folder);
+    await ensureToken();
+    ["#q","#btnOut"].forEach(s => $(s).hidden = false);
+    $("#who").textContent = "👤 " + user;
+    const { videos, subs } = await scan(folderId);
     movies = videos.map(v => {
       const base = v.name.replace(/\.[^.]+$/, "");
-      const sameFolderSubs = subs.filter(s => s.folder === v.folder);
-      const exact = sameFolderSubs.filter(s => s.name.toLowerCase().startsWith(base.toLowerCase()));
-      return { ...v, title: cleanTitle(base), subs: exact.length ? exact : (sameFolderSubs.length && videos.filter(x => x.folder === v.folder).length === 1 ? sameFolderSubs : []) };
+      const here = subs.filter(s => s.folder === v.folder);
+      const exact = here.filter(s => s.name.toLowerCase().startsWith(base.toLowerCase()));
+      const alone = videos.filter(x => x.folder === v.folder).length === 1;
+      return { ...v, title: cleanTitle(base), subs: exact.length ? exact : (alone ? here : []) };
     }).sort((a, b) => a.title.localeCompare(b.title, "es"));
     render();
   } catch (e) {
+    if (e.message === "nologin") return;
     console.error(e);
-    folderInput("No pude leer esa carpeta (" + e.message + "). Prueba con otra.");
+    app.innerHTML = `<div class="center"><h2>No pude cargar las películas</h2><p>${esc(e.message)}</p><button onclick="start()">Reintentar</button></div>`;
   }
 }
 function cleanTitle(s){
@@ -215,10 +198,12 @@ function cleanTitle(s){
 function hue(s){ let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
 function fmtSize(b){ b = +b || 0; return b > 1e9 ? (b / 1e9).toFixed(1) + " GB" : (b / 1e6).toFixed(0) + " MB"; }
 function fmtDur(ms){ if (!ms) return ""; const m = Math.round(ms / 60000); return Math.floor(m / 60) + "h " + (m % 60) + "m"; }
-function esc(s){ return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+const posKey = id => "pos:" + user + ":" + id;
+const doneKey = id => "done:" + user + ":" + id;
 
 function cardHTML(m){
-  const p = store.get("pos:" + m.id, null);
+  const p = store.get(posKey(m.id), 0);
   const dur = +m.videoMediaMetadata?.durationMillis || 0;
   const pct = p && dur ? Math.min(100, p * 1000 / dur * 100) : 0;
   const h = hue(m.title);
@@ -230,15 +215,14 @@ function cardHTML(m){
 function render(){
   const q = $("#q").value.trim().toLowerCase();
   const list = movies.filter(m => !q || m.title.toLowerCase().includes(q));
-  if (!movies.length) { app.innerHTML = `<div class="center"><h2>No encontré videos</h2><p>Sube películas a la carpeta o elige otra con 📁.</p></div>`; return; }
-  const cont = list.filter(m => store.get("pos:" + m.id, 0) > 60 && !store.get("done:" + m.id, false));
+  if (!movies.length) { app.innerHTML = `<div class="center"><h2>Todavía no hay películas</h2><p>Súbelas a la carpeta de Drive y recarga.</p></div>`; return; }
+  const cont = list.filter(m => store.get(posKey(m.id), 0) > 60 && !store.get(doneKey(m.id), false));
   app.innerHTML =
     (cont.length && !q ? `<h3 class="sec">Seguir viendo</h3><div class="grid">${cont.map(cardHTML).join("")}</div>` : "") +
     `<h3 class="sec">${q ? "Resultados" : "Todas"} (${list.length})</h3><div class="grid">${list.map(cardHTML).join("")}</div>`;
   app.querySelectorAll(".card").forEach(c => c.onclick = () => play(movies.find(m => m.id === c.dataset.id)));
 }
 $("#q").oninput = render;
-$("#btnFolder").onclick = () => { store.set("folder", null); folderInput(); };
 
 /* ---------- Reproductor ---------- */
 function srtToVtt(s){
@@ -248,22 +232,14 @@ function srtToVtt(s){
 async function play(m){
   current = m;
   $("#ptitle").textContent = m.title;
-  $("#mode").value = store.get("mode:" + m.id, DIRECT_OK.test(m.name) ? "direct" : "drive");
   $("#player").classList.add("on");
   try { await document.documentElement.requestFullscreen?.(); } catch {}
-  loadStage();
-}
-async function loadStage(){
-  const m = current, mode = $("#mode").value, stage = $("#stage");
-  saveNow(); stage.innerHTML = "";
-  if (mode === "drive") {
-    stage.innerHTML = `<iframe src="https://drive.google.com/file/d/${m.id}/preview" allow="autoplay; fullscreen" allowfullscreen></iframe>`;
-    return;
-  }
-  await ensureToken(); await sendTokenToSW();
-  const reg = swReady && await swReady;
+  const stage = $("#stage");
+  stage.innerHTML = `<div class="center">Cargando…</div>`;
+  try { await ensureToken(); } catch { return; }
+  const reg = await swReady;
   if (!reg || !navigator.serviceWorker.controller) {
-    stage.innerHTML = `<div class="center">El modo directo necesita recargar la página una vez. <button onclick="location.reload()">Recargar</button></div>`;
+    stage.innerHTML = `<div class="center">Hay que recargar la página una vez. <button onclick="location.reload()">Recargar</button></div>`;
     return;
   }
   const v = document.createElement("video");
@@ -271,32 +247,30 @@ async function loadStage(){
   v.src = "stream/" + m.id;
   for (const s of m.subs) {
     try {
-      const r = await api("/files/" + s.id, { alt: "media" });
-      let txt = await r.text();
+      let txt = await (await api("/files/" + s.id, { alt: "media" })).text();
       if (/\.srt$/i.test(s.name)) txt = srtToVtt(txt);
       const t = document.createElement("track");
-      t.kind = "subtitles"; t.label = s.name.replace(/\.[^.]+$/, "").replace(/^.*?[.\s_-]([a-z]{2,3})$/i, "$1") || "Subtítulos";
+      t.kind = "subtitles";
+      t.label = (s.name.match(/\.([a-z]{2,3})\.(srt|vtt)$/i) || [, "Subtítulos"])[1];
       t.src = URL.createObjectURL(new Blob([txt], { type: "text/vtt" }));
       if (!v.querySelector("track")) t.default = true;
       v.appendChild(t);
     } catch (e) { console.warn("subtítulo", e); }
   }
-  const pos = store.get("pos:" + m.id, 0);
+  const pos = store.get(posKey(m.id), 0);
   v.addEventListener("loadedmetadata", () => { if (pos > 10 && pos < v.duration - 30) v.currentTime = pos; }, { once: true });
   v.addEventListener("timeupdate", () => { if (Math.floor(v.currentTime) % 5 === 0) saveNow(); });
-  v.addEventListener("ended", () => { store.set("done:" + m.id, true); store.set("pos:" + m.id, 0); });
+  v.addEventListener("ended", () => { store.set(doneKey(m.id), true); store.set(posKey(m.id), 0); });
   v.addEventListener("error", () => {
-    stage.innerHTML = `<div class="center"><h2>Tu navegador no puede reproducir este archivo directo</h2>
-      <p>Pasa al <b>Reproductor de Drive</b>, que convierte el formato automáticamente.</p>
-      <button class="pri" onclick="document.querySelector('#mode').value='drive';loadStage()">Usar reproductor de Drive</button></div>`;
+    stage.innerHTML = `<div class="center"><h2>Este archivo no se puede reproducir en el navegador</h2>
+      <p>Probablemente es MKV/AVI o usa un códec no compatible. Conviértelo a <b>MP4 (H.264)</b> y vuelve a subirlo.</p></div>`;
   });
-  stage.appendChild(v);
+  stage.innerHTML = ""; stage.appendChild(v);
 }
 function saveNow(){
   const v = $("#stage video");
-  if (v && current && v.currentTime > 0) store.set("pos:" + current.id, Math.floor(v.currentTime));
+  if (v && current && v.currentTime > 0) store.set(posKey(current.id), Math.floor(v.currentTime));
 }
-$("#mode").onchange = () => { store.set("mode:" + current.id, $("#mode").value); loadStage(); };
 $("#btnBack").onclick = () => {
   saveNow(); $("#stage").innerHTML = ""; $("#player").classList.remove("on");
   if (document.fullscreenElement) document.exitFullscreen?.();
@@ -304,7 +278,7 @@ $("#btnBack").onclick = () => {
 };
 window.addEventListener("pagehide", saveNow);
 
-initAuth();
+start();
 </script>
 </body>
 </html>
