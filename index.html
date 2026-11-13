@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0f1115">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Mi Cine">
 <title>Mi Cine</title>
 <style>
   :root{--bg:#0f1115;--card:#1a1d24;--card2:#232731;--txt:#e9ecf1;--mut:#9aa3b2;--acc:#e5484d;--rad:12px}
@@ -36,6 +43,9 @@
   #pbar .t{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #stage{flex:1;display:flex;align-items:center;justify-content:center;min-height:0}
   #stage video{width:100%;height:100%;background:#000}
+  #iosTip{position:fixed;left:12px;right:12px;bottom:12px;z-index:30;background:var(--card2);border:1px solid #333a47;border-radius:12px;padding:14px 40px 14px 14px;font-size:14px;line-height:1.4}
+  #iosTip b{color:var(--acc)} #iosTip button{position:absolute;top:8px;right:8px;padding:2px 9px}
+  header{padding-top:max(14px,env(safe-area-inset-top))}
   @media (max-width:600px){#who{display:none} header{flex-wrap:wrap} input[type=search]{order:9;width:100%}}
 </style>
 </head>
@@ -44,6 +54,7 @@
   <h1>Mi <span>Cine</span></h1>
   <input type="search" id="q" placeholder="Buscar película…" hidden>
   <span id="who"></span>
+  <button id="btnInstall" class="pri" hidden>Instalar app</button>
   <button id="btnOut" hidden>Salir</button>
 </header>
 <main id="app"><div class="center">Cargando…</div></main>
@@ -234,6 +245,7 @@ async function play(m){
   $("#ptitle").textContent = m.title;
   $("#player").classList.add("on");
   try { await document.documentElement.requestFullscreen?.(); } catch {}
+  try { await screen.orientation?.lock?.("landscape"); } catch {}
   const stage = $("#stage");
   stage.innerHTML = `<div class="center">Cargando…</div>`;
   try { await ensureToken(); } catch { return; }
@@ -273,10 +285,29 @@ function saveNow(){
 }
 $("#btnBack").onclick = () => {
   saveNow(); $("#stage").innerHTML = ""; $("#player").classList.remove("on");
+  try { screen.orientation?.unlock?.(); } catch {}
   if (document.fullscreenElement) document.exitFullscreen?.();
   render();
 };
 window.addEventListener("pagehide", saveNow);
+
+/* ---------- Instalar como app (PWA) ---------- */
+const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+let installEvt = null;
+addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; $("#btnInstall").hidden = false; });
+addEventListener("appinstalled", () => { $("#btnInstall").hidden = true; installEvt = null; });
+$("#btnInstall").onclick = async () => {
+  if (!installEvt) return;
+  installEvt.prompt(); await installEvt.userChoice; installEvt = null; $("#btnInstall").hidden = true;
+};
+// iPhone/iPad: Safari no tiene botón de instalar, se muestra cómo hacerlo
+if (!standalone && /iphone|ipad|ipod/i.test(navigator.userAgent) && !store.get("iosTipSeen", false)) {
+  const tip = document.createElement("div");
+  tip.id = "iosTip";
+  tip.innerHTML = `Instala Mi Cine: toca <b>Compartir</b> ⬆️ y luego <b>"Agregar a pantalla de inicio"</b>.<button>✕</button>`;
+  tip.querySelector("button").onclick = () => { tip.remove(); store.set("iosTipSeen", true); };
+  document.body.appendChild(tip);
+}
 
 start();
 </script>
