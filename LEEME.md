@@ -26,6 +26,13 @@ Los nombres de usuario van en minúsculas. Si borras a alguien de la lista, pier
    - `SESSION_SECRET`: cualquier texto largo y aleatorio.
 5. Pega la URL del Worker en `index.html`, en `WORKER_URL`.
 
+## "Seguir viendo" sincronizado
+Cloudflare → Storage & Databases → D1 → Create, con el nombre `micine`. Luego, en el Worker, ve a Settings → Bindings → Add → D1 database, pon `DB` como nombre de variable, elige `micine` y presiona Deploy. La tabla se crea sola.
+
+## Enviar a la TV (Chromecast)
+Funciona desde Chrome en Android, PC o Mac, con la TV en la misma red Wi-Fi. En iPhone no está disponible porque Safari no soporta Cast.
+En la ficha de la película aparece el botón "📺 Ver en la TV". La TV recibe un enlace firmado que vence en 8 horas.
+
 ## Carátulas
 - Automáticas desde TMDB: agrega el secreto `TMDB_KEY` en el Worker (token de lectura de themoviedb.org → Ajustes → API).
 - Para el mejor resultado, nombra el archivo `Titulo (Año).mp4`.

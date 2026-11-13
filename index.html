@@ -57,6 +57,15 @@
   #info .sub{color:var(--mut);font-size:14px;margin-bottom:12px}
   #info p{line-height:1.5;color:#cfd5df;margin:0 0 16px}
   #info .acts{display:flex;gap:10px;flex-wrap:wrap}
+  #castBar{position:fixed;left:0;right:0;bottom:0;z-index:12;background:#1d2029;border-top:1px solid #333a47;padding:10px 16px calc(10px + env(safe-area-inset-bottom));display:none;gap:12px;align-items:center}
+  #castBar.on{display:flex}
+  #castBar img{width:40px;height:60px;object-fit:cover;border-radius:4px}
+  #castBar .ct{flex:1;min-width:0}
+  #castBar .ct b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #castBar .ct small{color:var(--mut)}
+  #castBar input[type=range]{width:100%;accent-color:var(--acc)}
+  #castBar button{padding:6px 10px}
+  body.casting main{padding-bottom:120px}
   @media (max-width:600px){#who{display:none} header{flex-wrap:wrap} input[type=search]{order:9;width:100%}
     .grid{grid-template-columns:repeat(3,1fr);gap:10px} .poster{font-size:13px;padding:8px} .meta{padding:6px 8px 8px;font-size:11px} .ttl{font-size:12px;padding:6px 8px 0}
     #info .box{flex-direction:column;align-items:center;text-align:center} #info img{width:150px;align-self:center} #info .acts{justify-content:center}}
@@ -72,6 +81,15 @@
 </header>
 <main id="app"><div class="center">Cargando…</div></main>
 <div id="info"><div class="box"></div></div>
+<div id="castBar">
+  <img id="cbImg" alt="" hidden>
+  <div class="ct"><b id="cbTitle"></b><small id="cbDev"></small>
+    <input type="range" id="cbSeek" min="0" max="100" value="0" step="1"></div>
+  <button id="cbBack" title="Retroceder 10 s">⟲10</button>
+  <button id="cbPlay" title="Pausa">⏸</button>
+  <button id="cbFwd" title="Adelantar 30 s">30⟳</button>
+  <button id="cbStop" title="Dejar de transmitir">✕</button>
+</div>
 
 <div id="player">
   <div id="pbar">
@@ -218,6 +236,7 @@ async function start(){
         pic: pic || null, subs: exact.length ? exact : (alone ? here : []) };
     }).sort((a, b) => a.title.localeCompare(b.title, "es"));
     render();
+    if (await pullProgress()) render();
     loadPosters();
   } catch (e) {
     if (e.message === "nologin") return;
@@ -234,11 +253,50 @@ function hue(s){ let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 
 function fmtSize(b){ b = +b || 0; return b > 1e9 ? (b / 1e9).toFixed(1) + " GB" : (b / 1e6).toFixed(0) + " MB"; }
 function fmtDur(ms){ if (!ms) return ""; const m = Math.round(ms / 60000); return Math.floor(m / 60) + "h " + (m % 60) + "m"; }
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
-const posKey = id => "pos:" + user + ":" + id;
-const doneKey = id => "done:" + user + ":" + id;
+/* ---------- Avance ("Seguir viendo"), sincronizado entre dispositivos ---------- */
+const progKey = id => "prog:" + user + ":" + id;
+function getProg(id){
+  const v = store.get(progKey(id), null);
+  if (v) return v;
+  return { p: store.get("pos:" + user + ":" + id, 0), d: store.get("done:" + user + ":" + id, false), t: 0 };
+}
+let pendingProg = {}, progTimer = null;
+function setProg(id, p, d){
+  const v = { p: Math.floor(p), d: !!d, t: Date.now() };
+  store.set(progKey(id), v); pendingProg[id] = v;
+  if (!progTimer) progTimer = setTimeout(flushProgress, 20000);
+}
+function flushProgress(leaving){
+  clearTimeout(progTimer); progTimer = null;
+  const items = Object.entries(pendingProg).map(([id, v]) => ({ id, p: v.p, d: v.d, t: v.t }));
+  const session = store.get("session", null);
+  if (!items.length || !session) return;
+  pendingProg = {};
+  fetch(WORKER_URL + "/progress", { method: "POST", keepalive: !!leaving,
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + session },
+    body: JSON.stringify(items) })
+    .then(r => { if (!r.ok && r.status !== 501) throw 0; })
+    .catch(() => { for (const it of items) if (!pendingProg[it.id]) pendingProg[it.id] = it; });
+}
+async function pullProgress(){
+  try {
+    const r = await fetch(WORKER_URL + "/progress", { headers: { Authorization: "Bearer " + store.get("session", "") } });
+    if (!r.ok) return false;
+    let changed = false;
+    for (const row of await r.json()) {
+      const loc = store.get(progKey(row.id), null);
+      if (!loc || row.t > loc.t) { store.set(progKey(row.id), { p: row.p, d: row.d, t: row.t }); changed = true; }
+    }
+    return changed;
+  } catch { return false; }
+}
+document.addEventListener("visibilitychange", async () => {
+  if (document.hidden) { saveNow(); flushProgress(true); return; }
+  if (movies.length && !$("#player").classList.contains("on") && await pullProgress()) render();
+});
 
 function cardHTML(m){
-  const p = store.get(posKey(m.id), 0);
+  const p = getProg(m.id).p;
   const dur = +m.videoMediaMetadata?.durationMillis || 0;
   const pct = p && dur ? Math.min(100, p * 1000 / dur * 100) : 0;
   const h = hue(m.title);
@@ -286,14 +344,15 @@ async function loadPosters(){
 function showInfo(m){
   const meta = metaOf(m) || {}, img = posterOf(m);
   const dur = fmtDur(+m.videoMediaMetadata?.durationMillis || 0);
-  const pos = store.get(posKey(m.id), 0);
+  const pr = getProg(m.id), pos = pr.p;
   const sub = [meta.year || m.year, dur, meta.rating ? "⭐ " + meta.rating : "", m.subs.length ? "Subtítulos" : ""].filter(Boolean).join(" · ");
   $("#info .box").innerHTML = `
     ${img ? `<img src="${img}" alt="">` : ""}
     <div><h2>${esc(meta.title || m.title)}</h2><div class="sub">${esc(sub)}</div>
       <p>${esc(meta.overview || "Sin sinopsis.")}</p>
       <div class="acts">
-        <button class="pri" id="iPlay">▶ ${pos > 60 && !store.get(doneKey(m.id), false) ? "Continuar" : "Ver"}</button>
+        <button class="pri" id="iPlay">▶ ${pos > 60 && !pr.d ? "Continuar" : "Ver"}</button>
+        ${castAvailable() ? `<button id="iCast">📺 Ver en la TV</button>` : ""}
         ${pos > 60 ? `<button id="iRestart">Desde el inicio</button>` : ""}
         <button id="iClose">Cerrar</button>
       </div></div>`;
@@ -301,14 +360,16 @@ function showInfo(m){
   const close = () => $("#info").classList.remove("on");
   $("#iClose").onclick = close;
   $("#iPlay").onclick = () => { close(); play(m); };
-  if ($("#iRestart")) $("#iRestart").onclick = () => { store.set(posKey(m.id), 0); store.set(doneKey(m.id), false); close(); play(m); };
+  if ($("#iCast")) $("#iCast").onclick = () => { close(); castMovie(m); };
+  if ($("#iRestart")) $("#iRestart").onclick = () => { setProg(m.id, 0, false); close(); play(m); };
 }
 $("#info").onclick = e => { if (e.target.id === "info") $("#info").classList.remove("on"); };
 function render(){
   const q = $("#q").value.trim().toLowerCase();
   const list = movies.filter(m => !q || m.title.toLowerCase().includes(q));
   if (!movies.length) { app.innerHTML = `<div class="center"><h2>Todavía no hay películas</h2><p>Súbelas a la carpeta de Drive y recarga.</p></div>`; return; }
-  const cont = list.filter(m => store.get(posKey(m.id), 0) > 60 && !store.get(doneKey(m.id), false));
+  const cont = list.filter(m => { const pr = getProg(m.id); return pr.p > 60 && !pr.d; })
+    .sort((a, b) => getProg(b.id).t - getProg(a.id).t);
   app.innerHTML =
     (cont.length && !q ? `<h3 class="sec">Seguir viendo</h3><div class="grid">${cont.map(cardHTML).join("")}</div>` : "") +
     `<h3 class="sec">${q ? "Resultados" : "Todas"} (${list.length})</h3><div class="grid">${list.map(cardHTML).join("")}</div>`;
@@ -350,10 +411,11 @@ async function play(m){
       v.appendChild(t);
     } catch (e) { console.warn("subtítulo", e); }
   }
-  const pos = store.get(posKey(m.id), 0);
+  const pos = getProg(m.id).p;
   v.addEventListener("loadedmetadata", () => { if (pos > 10 && pos < v.duration - 30) v.currentTime = pos; }, { once: true });
   v.addEventListener("timeupdate", () => { if (Math.floor(v.currentTime) % 5 === 0) saveNow(); });
-  v.addEventListener("ended", () => { store.set(doneKey(m.id), true); store.set(posKey(m.id), 0); });
+  v.addEventListener("ended", () => { setProg(m.id, 0, true); flushProgress(); });
+  v.addEventListener("pause", () => { saveNow(); flushProgress(); });
   v.addEventListener("error", () => {
     stage.innerHTML = `<div class="center"><h2>Este archivo no se puede reproducir en el navegador</h2>
       <p>Probablemente es MKV/AVI o usa un códec no compatible. Conviértelo a <b>MP4 (H.264)</b> y vuelve a subirlo.</p></div>`;
@@ -362,15 +424,112 @@ async function play(m){
 }
 function saveNow(){
   const v = $("#stage video");
-  if (v && current && v.currentTime > 0) store.set(posKey(current.id), Math.floor(v.currentTime));
+  if (v && current && v.currentTime > 0 && !v.ended) setProg(current.id, v.currentTime, false);
 }
 $("#btnBack").onclick = () => {
-  saveNow(); $("#stage").innerHTML = ""; $("#player").classList.remove("on");
+  saveNow(); flushProgress(); $("#stage").innerHTML = ""; $("#player").classList.remove("on");
   try { screen.orientation?.unlock?.(); } catch {}
   if (document.fullscreenElement) document.exitFullscreen?.();
   render();
 };
-window.addEventListener("pagehide", saveNow);
+window.addEventListener("pagehide", () => { saveNow(); flushProgress(true); });
+
+/* ---------- Enviar a la TV (Chromecast) ---------- */
+let castReady = false, castingMovie = null, rp = null, rpc = null, castSaveTick = 0, lastCastTime = 0;
+window.__onGCastApiAvailable = ok => {
+  if (!ok) return;
+  const ctx = cast.framework.CastContext.getInstance();
+  ctx.setOptions({ receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
+                   autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED });
+  rp = new cast.framework.RemotePlayer();
+  rpc = new cast.framework.RemotePlayerController(rp);
+  const E = cast.framework.RemotePlayerEventType;
+  rpc.addEventListener(E.IS_CONNECTED_CHANGED, () => { if (!rp.isConnected) endCastUI(); });
+  rpc.addEventListener(E.IS_PAUSED_CHANGED, () => {
+    $("#cbPlay").textContent = rp.isPaused ? "▶" : "⏸";
+    if (rp.isPaused) { saveCast(); flushProgress(); }
+  });
+  rpc.addEventListener(E.CURRENT_TIME_CHANGED, () => {
+    if (!castingMovie || !rp.duration) return;
+    if (rp.currentTime > 0) lastCastTime = rp.currentTime;
+    if (!seeking) $("#cbSeek").value = Math.round(rp.currentTime / rp.duration * 1000);
+    if (++castSaveTick % 5 === 0) saveCast();
+  });
+  rpc.addEventListener(E.PLAYER_STATE_CHANGED, () => {
+    if (castingMovie && rp.playerState === chrome.cast.media.PlayerState.IDLE && castSaveTick > 10) {
+      const finished = rp.duration && lastCastTime > rp.duration - 90;
+      if (finished) { setProg(castingMovie.id, 0, true); flushProgress(); castingMovie = null; }
+      endCastUI();
+    }
+  });
+  ctx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, () => { castReady = true; });
+  castReady = true;
+};
+function castAvailable(){
+  if (!castReady || !window.cast?.framework) return false;
+  return cast.framework.CastContext.getInstance().getCastState() !== cast.framework.CastState.NO_DEVICES_AVAILABLE;
+}
+let seeking = false;
+function saveCast(){ if (castingMovie && lastCastTime > 0) setProg(castingMovie.id, lastCastTime, false); }
+async function castMovie(m){
+  const ctx = cast.framework.CastContext.getInstance();
+  try { if (!ctx.getCurrentSession()) await ctx.requestSession(); } catch { return; } // canceló el selector
+  const session = ctx.getCurrentSession();
+  try {
+    const r = await fetch(`${WORKER_URL}/castlink?id=${m.id}&subs=${m.subs.map(s => s.id).join(",")}`,
+      { headers: { Authorization: "Bearer " + store.get("session", "") } });
+    const link = await r.json();
+    if (!r.ok) throw new Error(link.error || r.status);
+    const type = /\.webm$/i.test(m.name) ? "video/webm" : /\.mkv$/i.test(m.name) ? "video/x-matroska" : "video/mp4";
+    const info = new chrome.cast.media.MediaInfo(link.video, type);
+    info.streamType = chrome.cast.media.StreamType.BUFFERED;
+    const meta = metaOf(m) || {};
+    info.metadata = new chrome.cast.media.MovieMediaMetadata();
+    info.metadata.title = meta.title || m.q;
+    if (meta.poster) info.metadata.images = [new chrome.cast.Image(meta.poster)];
+    info.tracks = link.subs.map((u, i) => {
+      const t = new chrome.cast.media.Track(i + 1, chrome.cast.media.TrackType.TEXT);
+      t.trackContentId = u; t.trackContentType = "text/vtt";
+      t.subtype = chrome.cast.media.TextTrackType.SUBTITLES;
+      t.name = (m.subs[i].name.match(/\.([a-z]{2,3})\.(srt|vtt)$/i) || [, "Subtítulos"])[1];
+      t.language = "es";
+      return t;
+    });
+    const req = new chrome.cast.media.LoadRequest(info);
+    const pr = getProg(m.id);
+    req.currentTime = pr.p > 10 && !pr.d ? pr.p : 0;
+    req.autoplay = true;
+    if (info.tracks.length) req.activeTrackIds = [1];
+    await session.loadMedia(req);
+    castingMovie = m; castSaveTick = 0; lastCastTime = req.currentTime;
+    $("#cbTitle").textContent = meta.title || m.q;
+    $("#cbDev").textContent = "📺 En " + (session.getCastDevice().friendlyName || "la TV");
+    const img = posterOf(m); $("#cbImg").hidden = !img; if (img) $("#cbImg").src = img;
+    $("#cbSeek").max = 1000; $("#cbPlay").textContent = "⏸";
+    $("#castBar").classList.add("on"); document.body.classList.add("casting");
+  } catch (e) {
+    console.error(e);
+    alertBox("No se pudo enviar a la TV: " + (e.description || e.message || e.code || e));
+  }
+}
+function endCastUI(){
+  saveCast(); flushProgress();
+  castingMovie = null; $("#castBar").classList.remove("on"); document.body.classList.remove("casting");
+  if (movies.length) render();
+}
+function alertBox(msg){
+  $("#info .box").innerHTML = `<div><p>${esc(msg)}</p><div class="acts"><button id="iClose">Cerrar</button></div></div>`;
+  $("#info").classList.add("on"); $("#iClose").onclick = () => $("#info").classList.remove("on");
+}
+$("#cbPlay").onclick = () => rpc?.playOrPause();
+$("#cbBack").onclick = () => { if (rp) { rp.currentTime = Math.max(0, rp.currentTime - 10); rpc.seek(); } };
+$("#cbFwd").onclick = () => { if (rp) { rp.currentTime = Math.min(rp.duration - 1, rp.currentTime + 30); rpc.seek(); } };
+$("#cbStop").onclick = () => { saveCast(); cast.framework.CastContext.getInstance().endCurrentSession(true); endCastUI(); };
+$("#cbSeek").oninput = () => { seeking = true; };
+$("#cbSeek").onchange = () => {
+  if (rp?.duration) { rp.currentTime = $("#cbSeek").value / 1000 * rp.duration; rpc.seek(); }
+  seeking = false;
+};
 
 /* ---------- Instalar como app (PWA) ---------- */
 const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
@@ -392,5 +551,6 @@ if (!standalone && /iphone|ipad|ipod/i.test(navigator.userAgent) && !store.get("
 
 start();
 </script>
+<script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1" async></script>
 </body>
 </html>

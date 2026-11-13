@@ -8,6 +8,8 @@
 //   USERS           {"jorge":"clave1","mama":"clave2"}  (usuario en minúsculas)
 //   SESSION_SECRET  texto largo y aleatorio (firma las sesiones)
 //   TMDB_KEY        (opcional) clave API o token de lectura de themoviedb.org, para carátulas
+// Bindings (Settings → Bindings):
+//   DB              (opcional) base de datos D1 para sincronizar "Seguir viendo" entre dispositivos
 
 const ALLOWED_ORIGINS = ["https://jorgeflore.github.io", "http://localhost:8000"];
 const SESSION_DAYS = 30;
@@ -19,15 +21,20 @@ export default {
     const cors = {
       "Access-Control-Allow-Origin": ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, HEAD, OPTIONS",
       "Vary": "Origin",
     };
     const json = (o, status = 200) =>
       new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
-    if (req.method === "OPTIONS") return new Response(null, { headers: cors });
     const url = new URL(req.url);
     const { pathname } = url;
+    if (req.method === "OPTIONS") {
+      if (pathname.startsWith("/cast")) return new Response(null, { headers: {
+        "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Range",
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS" } });
+      return new Response(null, { headers: cors });
+    }
 
     try {
       const users = JSON.parse(env.USERS);
@@ -64,6 +71,63 @@ export default {
         return new Response(res.body, { headers: { ...cors, "Content-Type": "application/json" } });
       }
 
+      /* ----- Avance sincronizado (D1) ----- */
+      if (pathname === "/progress") {
+        if (!authed) return json({ error: "Sesión inválida" }, 401);
+        const db = await progressDb(env);
+        if (!db) return json({ error: "Falta la base de datos DB" }, 501);
+        if (req.method === "POST") {
+          const items = [].concat(await req.json()).slice(0, 50);
+          await db.batch(items.map(it => db.prepare(
+            `INSERT INTO progress (user, id, pos, done, t) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(user, id) DO UPDATE SET pos = excluded.pos, done = excluded.done, t = excluded.t
+             WHERE excluded.t >= progress.t`
+          ).bind(data.u, String(it.id), Math.max(0, Math.floor(+it.p || 0)), it.d ? 1 : 0, Math.floor(+it.t || Date.now()))));
+          return json({ ok: true });
+        }
+        const { results } = await db.prepare("SELECT id, pos, done, t FROM progress WHERE user = ?1").bind(data.u).all();
+        return json(results.map(r => ({ id: r.id, p: r.pos, d: !!r.done, t: r.t })));
+      }
+
+      /* ----- Chromecast: enlaces firmados que la TV puede abrir sin sesión ----- */
+      if (pathname === "/castlink") {
+        if (!authed) return json({ error: "Sesión inválida" }, 401);
+        const id = url.searchParams.get("id") || "";
+        const subs = (url.searchParams.get("subs") || "").split(",").filter(Boolean);
+        if (!/^[\w-]+$/.test(id) || !subs.every(x => /^[\w-]+$/.test(x))) return json({ error: "ID inválido" }, 400);
+        const t = await signSession({ u: data.u, c: [id, ...subs], exp: Date.now() + 8 * 3600e3 }, env.SESSION_SECRET);
+        const base = url.origin;
+        return json({
+          video: `${base}/cast/${id}?t=${t}`,
+          subs: subs.map(s => `${base}/castsub/${s}.vtt?t=${t}`),
+        });
+      }
+      const castMatch = pathname.match(/^\/(cast|castsub)\/([\w-]+?)(\.vtt)?$/);
+      if (castMatch) {
+        const [, kind, id] = castMatch;
+        const open = { "Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges" };
+        const ct = await verifySession(url.searchParams.get("t") || "", env.SESSION_SECRET);
+        if (!ct || !Array.isArray(ct.c) || !ct.c.includes(id) || !Object.hasOwn(users, ct.u))
+          return new Response("Enlace vencido", { status: 403, headers: open });
+        const g = await googleToken(env);
+        const headers = { Authorization: "Bearer " + g.token };
+        const range = req.headers.get("Range");
+        if (range && kind === "cast") headers.Range = range;
+        const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`, { headers });
+        if (!r.ok) return new Response("Drive " + r.status, { status: r.status, headers: open });
+        if (kind === "castsub") {
+          let txt = await r.text();
+          if (!txt.trimStart().startsWith("WEBVTT")) txt = srtToVtt(txt);
+          return new Response(txt, { headers: { ...open, "Content-Type": "text/vtt; charset=utf-8" } });
+        }
+        const out = new Headers(open);
+        for (const h of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"]) {
+          const v = r.headers.get(h); if (v) out.set(h, v);
+        }
+        if (!out.has("Accept-Ranges")) out.set("Accept-Ranges", "bytes");
+        return new Response(req.method === "HEAD" ? null : r.body, { status: r.status, headers: out });
+      }
+
       if (pathname === "/token") {
         if (!authed) return json({ error: "Sesión inválida" }, 401);
         const t = await googleToken(env);
@@ -81,6 +145,25 @@ export default {
     }
   },
 };
+
+/* ---------- Base de datos del avance ---------- */
+let dbReady = false;
+async function progressDb(env) {
+  if (!env.DB) return null;
+  if (!dbReady) {
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS progress (
+         user TEXT NOT NULL, id TEXT NOT NULL, pos INTEGER NOT NULL DEFAULT 0,
+         done INTEGER NOT NULL DEFAULT 0, t INTEGER NOT NULL, PRIMARY KEY (user, id))`
+    ).run();
+    dbReady = true;
+  }
+  return env.DB;
+}
+function srtToVtt(s) {
+  return "WEBVTT\n\n" + s.replace(/\r/g, "").replace(/^\uFEFF/, "")
+    .replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2").replace(/^\d+\n(?=\d\d:)/gm, "");
+}
 
 /* ---------- Carátulas y sinopsis desde TMDB ---------- */
 async function tmdb(q, y, key) {
