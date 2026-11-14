@@ -87,6 +87,10 @@
   .arr{position:absolute;top:4px;bottom:10px;width:44px;z-index:2;border:0;border-radius:0;background:rgba(15,17,21,.75);font-size:26px;opacity:0;transition:opacity .2s}
   .rowwrap:hover .arr{opacity:1} .arr.l{left:0} .arr.r{right:0}
   @media (hover:none){.arr{display:none}}
+  #ver{position:fixed;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:11;font-size:11px;color:var(--mut);
+    background:rgba(15,17,21,.7);border:1px solid #2c313c;border-radius:999px;padding:3px 9px;cursor:pointer;opacity:.75}
+  #ver:hover{opacity:1}
+  body.casting #ver{bottom:calc(96px + env(safe-area-inset-bottom))}
   #castBar{position:fixed;left:0;right:0;bottom:0;z-index:12;background:#1d2029;border-top:1px solid #333a47;padding:10px 16px calc(10px + env(safe-area-inset-bottom));display:none;gap:12px;align-items:center}
   #castBar.on{display:flex}
   #castBar img{width:40px;height:60px;object-fit:cover;border-radius:4px}
@@ -114,6 +118,7 @@
 </header>
 <main id="app"><div class="center">Cargando…</div></main>
 <div id="info"><div class="box"></div></div>
+<div id="ver" title="Versión de Mi Cine"></div>
 <div id="castBar">
   <img id="cbImg" alt="" hidden>
   <div class="ct"><b id="cbTitle"></b><small id="cbDev"></small>
@@ -133,6 +138,18 @@
 </div>
 
 <script>
+/* ============ VERSIÓN ============ */
+const APP_VERSION = "1.8.0";
+const NOVEDADES = [
+  ["1.8.0", "Número de versión en la esquina"],
+  ["1.7.0", "Arreglo de “Enviar a la TV” y publicación automática del servidor"],
+  ["1.6.0", "Panel de usuarios dentro de la app"],
+  ["1.5.0", "Portada estilo Netflix con filas por género"],
+  ["1.4.0", "“Seguir viendo” sincronizado y envío a la TV (Chromecast)"],
+  ["1.3.0", "Carátulas, sinopsis y ficha de cada película"],
+  ["1.2.0", "App instalable en el celular"],
+  ["1.1.0", "Usuarios propios, sin cuenta de Google"],
+];
 /* ============ CONFIGURACIÓN ============ */
 const WORKER_URL = "https://micine.koke-17-21.workers.dev"; // ej: https://micine.tu-cuenta.workers.dev
 /* ======================================= */
@@ -176,6 +193,7 @@ async function ensureToken(){
   if (!r.ok) throw new Error(j.error || ("Servidor " + r.status));
   token = j.access_token; tokenExp = Date.now() + (j.expires_in - 60) * 1000;
   folderId = j.folder; user = j.user; isAdmin = !!j.admin; isFixed = !!j.fixed;
+  serverVersion = j.version || ""; showVersion();
   await sendTokenToSW();
 }
 function showLogin(msg){
@@ -206,6 +224,19 @@ function logout(msg){
   store.set("session", null); token = null; tokenExp = 0; sendTokenToSW();
   showLogin(msg);
 }
+/* ---------- Versión ---------- */
+let serverVersion = "";
+function showVersion(){ $("#ver").textContent = "v" + APP_VERSION + (serverVersion ? " · srv " + serverVersion.split("_")[0] : ""); }
+$("#ver").onclick = () => {
+  $("#info .box").innerHTML = `<div style="width:100%"><h2 style="margin:0 0 4px">Mi Cine v${APP_VERSION}</h2>
+    <div style="color:var(--mut);font-size:14px;margin-bottom:14px">Servidor: ${esc(serverVersion ? serverVersion.replace(/_/g, " · ") : "sin datos (inicia sesión)")}</div>
+    <h3 style="margin:0 0 8px">Novedades</h3>
+    ${NOVEDADES.map(([v, t]) => `<div style="margin:0 0 8px"><b>v${v}</b> <span style="color:#cfd5df">${esc(t)}</span></div>`).join("")}
+    <div class="acts" style="margin-top:14px"><button id="iClose">Cerrar</button></div></div>`;
+  $("#info").classList.add("on"); $("#iClose").onclick = () => $("#info").classList.remove("on");
+};
+showVersion();
+
 /* ---------- Mi cuenta y administración de usuarios ---------- */
 let isAdmin = false, isFixed = false;
 $("#who").onclick = () => showAccount();

@@ -14,9 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Calcular versión
+        run: echo "VER=${GITHUB_SHA::7}_$(TZ=America/Santiago date +%d-%m-%Y_%H:%M)" >> "$GITHUB_ENV"
       - name: Publicar con Wrangler
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: 525704577ab0eb50d3c9e938a44512ee
-          command: deploy
+          command: deploy --var WORKER_VERSION:${{ env.VER }}

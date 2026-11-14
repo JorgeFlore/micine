@@ -209,6 +209,7 @@ export default {
           folder: env.FOLDER_ID,
           user: data.u,
           admin: isAdmin,
+          version: env.WORKER_VERSION || "manual",
           fixed: Object.hasOwn(users, data.u),
         });
       }
