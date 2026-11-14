@@ -36,6 +36,11 @@ Cloudflare → Storage & Databases → D1 → Create, con el nombre `micine`. Lu
 Funciona desde Chrome en Android, PC o Mac, con la TV en la misma red Wi-Fi. En iPhone no está disponible porque Safari no soporta Cast.
 En la ficha de la película aparece el botón "📺 Ver en la TV". La TV recibe un enlace firmado que vence en 8 horas.
 
+## Publicación automática del Worker
+Cada cambio en `worker/worker.js` que se sube a GitHub se publica solo en Cloudflare (GitHub Actions → "Publicar Worker en Cloudflare").
+Requiere el secreto `CLOUDFLARE_API_TOKEN` en GitHub (Settings → Secrets and variables → Actions), creado con la plantilla "Edit Cloudflare Workers".
+Para publicarlo a mano: pestaña Actions → "Publicar Worker en Cloudflare" → Run workflow.
+
 ## Carátulas
 - Automáticas desde TMDB: agrega el secreto `TMDB_KEY` en el Worker (token de lectura de themoviedb.org → Ajustes → API).
 - Para el mejor resultado, nombra el archivo `Titulo (Año).mp4`.

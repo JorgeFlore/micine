@@ -1,0 +1,15 @@
+# Configuración del Worker "micine" para la publicación automática (GitHub Actions).
+# Los secretos (SA_JSON, USERS, SESSION_SECRET, TMDB_KEY) viven en Cloudflare, no aquí.
+name = "micine"
+main = "worker/worker.js"
+compatibility_date = "2026-11-01"
+account_id = "525704577ab0eb50d3c9e938a44512ee"
+workers_dev = true
+
+# Conserva las variables creadas en el panel de Cloudflare (ej. FOLDER_ID)
+keep_vars = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "micine"
+database_id = "8021d1f9-c6a2-4598-859f-e5ba27df5962"
