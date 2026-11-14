@@ -167,8 +167,9 @@
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = "1.9.0";
+const APP_VERSION = "1.9.1";
 const NOVEDADES = [
+  ["1.9.1", "Botón “Instalar app” también en Opera, Samsung Internet, Firefox y otros navegadores"],
   ["1.9.0", "Solicitudes de películas: pide una película, vota las de otros y recibe aviso cuando esté disponible"],
   ["1.8.0", "Número de versión en la esquina"],
   ["1.7.0", "Arreglo de “Enviar a la TV” y publicación automática del servidor"],
@@ -906,8 +907,27 @@ const standalone = matchMedia("(display-mode: standalone)").matches || navigator
 let installEvt = null;
 addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; $("#btnInstall").hidden = false; });
 addEventListener("appinstalled", () => { $("#btnInstall").hidden = true; installEvt = null; });
+// Navegadores sin instalación automática (Opera, Samsung Internet, Firefox…): se muestran los pasos
+const isAndroid = /android/i.test(navigator.userAgent);
+if (!standalone && isAndroid) setTimeout(() => { if (!installEvt) $("#btnInstall").hidden = false; }, 3500);
+function installHelp(){
+  const ua = navigator.userAgent;
+  const nav = /OPR\//.test(ua) ? "Opera" : /SamsungBrowser/.test(ua) ? "Samsung Internet"
+    : /Firefox/.test(ua) ? "Firefox" : /EdgA/.test(ua) ? "Edge" : "tu navegador";
+  const pasos = nav === "Samsung Internet"
+    ? "Toca el menú <b>☰</b> (abajo a la derecha) → <b>Agregar página a</b> → <b>Pantalla de inicio</b>."
+    : nav === "Firefox"
+    ? "Toca el menú <b>⋮</b> → <b>Instalar</b> (o <b>Agregar a pantalla de inicio</b>)."
+    : "Toca el menú <b>⋮</b> (arriba a la derecha) → <b>Pantalla de inicio</b> / <b>Agregar a pantalla de inicio</b>.";
+  $("#info .box").innerHTML = `<div style="width:100%"><h2 style="margin:0 0 10px">📲 Instalar Mi Cine</h2>
+    <p>Estás usando <b>${nav}</b>. ${pasos}</p>
+    <p style="color:var(--mut)">Para la mejor experiencia (instalación con un toque y botón para enviar a la TV), abre
+      <b>jorgeflore.github.io/micine</b> en <b>Google Chrome</b>.</p>
+    <div class="acts"><button id="iClose">Entendido</button></div></div>`;
+  $("#info").classList.add("on"); $("#iClose").onclick = () => $("#info").classList.remove("on");
+}
 $("#btnInstall").onclick = async () => {
-  if (!installEvt) return;
+  if (!installEvt) return installHelp();
   installEvt.prompt(); await installEvt.userChoice; installEvt = null; $("#btnInstall").hidden = true;
 };
 // iPhone/iPad: Safari no tiene botón de instalar, se muestra cómo hacerlo
