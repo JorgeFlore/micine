@@ -87,6 +87,32 @@
   .arr{position:absolute;top:4px;bottom:10px;width:44px;z-index:2;border:0;border-radius:0;background:rgba(15,17,21,.75);font-size:26px;opacity:0;transition:opacity .2s}
   .rowwrap:hover .arr{opacity:1} .arr.l{left:0} .arr.r{right:0}
   @media (hover:none){.arr{display:none}}
+  #btnReq{position:relative}
+  #btnReq .bdg{position:absolute;top:-6px;right:-6px;background:var(--acc);color:#fff;border-radius:999px;font-size:11px;min-width:18px;height:18px;line-height:18px;padding:0 5px;font-weight:700}
+  .req{width:100%}
+  #info .req{text-align:left}
+  #info .req img{width:46px;height:69px;align-self:flex-start;border-radius:5px}
+  .req h2{margin:0 0 10px}
+  .req input,.req textarea{background:var(--bg);border:1px solid #2c313c;color:var(--txt);border-radius:8px;padding:10px;font-size:15px;width:100%;font-family:inherit}
+  .sres{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+  .sr{display:flex;gap:10px;align-items:center;background:var(--card2);border-radius:10px;padding:6px;cursor:pointer;border:1px solid transparent}
+  .sr:hover{border-color:#556}
+  .sr img,.sr .ph,.rq img,.rq .ph{width:46px;height:69px;border-radius:5px;object-fit:cover;flex-shrink:0;background:#2c313c}
+  .sr .tx,.rq .tx{min-width:0;flex:1}
+  .sr b,.rq b{display:block}
+  .sr small,.rq small{color:var(--mut);display:block}
+  .tabs{display:flex;gap:6px;margin:16px 0 8px;flex-wrap:wrap}
+  .tabs button{padding:5px 12px;border-radius:999px;font-size:13px}
+  .tabs button.on{background:var(--txt);color:#000;border-color:var(--txt)}
+  .rq{display:flex;gap:10px;background:var(--card2);border-radius:10px;padding:8px;margin-bottom:8px;align-items:flex-start}
+  .rq .ac{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .rq .ac button{padding:4px 9px;font-size:12px}
+  .chip{display:inline-block;font-size:11px;border-radius:4px;padding:1px 7px;margin-left:6px;font-weight:600;vertical-align:middle}
+  .chip.pendiente{background:#3a3320;color:#f5c451} .chip.agregada{background:#1d3a26;color:#7fd88f} .chip.rechazada{background:#3a2023;color:#ff9a9d}
+  .vote.on{background:var(--acc);border-color:var(--acc);color:#fff}
+  .reply{font-size:13px;color:#cfd5df;margin-top:4px;font-style:italic}
+  #toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(70px + env(safe-area-inset-top));z-index:14;background:#1d3a26;color:#e9ffe9;border:1px solid #2f6b40;border-radius:12px;padding:12px 16px;max-width:min(520px,92vw);box-shadow:0 8px 24px rgba(0,0,0,.4);cursor:pointer;display:none;font-size:14px}
+  #toast.on{display:block}
   #ver{position:fixed;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:11;font-size:11px;color:var(--mut);
     background:rgba(15,17,21,.7);border:1px solid #2c313c;border-radius:999px;padding:3px 9px;cursor:pointer;opacity:.75}
   #ver:hover{opacity:1}
@@ -112,6 +138,7 @@
 <header>
   <h1>Mi <span>Cine</span></h1>
   <input type="search" id="q" placeholder="Buscar película…" hidden>
+  <button id="btnReq" hidden>🎬 Pedir</button>
   <button id="who" hidden></button>
   <button id="btnInstall" class="pri" hidden>Instalar app</button>
 
@@ -119,6 +146,7 @@
 <main id="app"><div class="center">Cargando…</div></main>
 <div id="info"><div class="box"></div></div>
 <div id="ver" title="Versión de Mi Cine"></div>
+<div id="toast"></div>
 <div id="castBar">
   <img id="cbImg" alt="" hidden>
   <div class="ct"><b id="cbTitle"></b><small id="cbDev"></small>
@@ -139,8 +167,9 @@
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = "1.8.0";
+const APP_VERSION = "1.9.0";
 const NOVEDADES = [
+  ["1.9.0", "Solicitudes de películas: pide una película, vota las de otros y recibe aviso cuando esté disponible"],
   ["1.8.0", "Número de versión en la esquina"],
   ["1.7.0", "Arreglo de “Enviar a la TV” y publicación automática del servidor"],
   ["1.6.0", "Panel de usuarios dentro de la app"],
@@ -197,7 +226,7 @@ async function ensureToken(){
   await sendTokenToSW();
 }
 function showLogin(msg){
-  ["#q","#who"].forEach(s => $(s).hidden = true);
+  ["#q","#who","#btnReq"].forEach(s => $(s).hidden = true);
   app.innerHTML = `<div class="center"><h2>Bienvenido a Mi Cine</h2>
     <form class="login" id="flogin" autocomplete="on">
       <input id="lu" name="username" placeholder="Usuario" autocomplete="username" autocapitalize="none" required>
@@ -224,6 +253,135 @@ function logout(msg){
   store.set("session", null); token = null; tokenExp = 0; sendTokenToSW();
   showLogin(msg);
 }
+/* ---------- Solicitudes de películas ---------- */
+let reqFilter = "pendiente", reqCache = [];
+$("#btnReq").onclick = () => showRequests();
+const ESTADO_TXT = { pendiente: "Pendiente", agregada: "Agregada", rechazada: "No disponible" };
+async function checkRequests(){
+  try {
+    reqCache = await wapi("/requests");
+    const pend = reqCache.filter(r => r.status === "pendiente").length;
+    $("#btnReq").innerHTML = "🎬 Pedir" + (isAdmin && pend ? `<span class="bdg">${pend}</span>` : "");
+    // Avisar al usuario cuando una película que pidió (o votó) cambió de estado
+    const seenKey = "reqSeen:" + user, seen = store.get(seenKey, 0);
+    const news = reqCache.filter(r => (r.mine || r.voted) && r.status !== "pendiente" && r.updated > seen)
+      .sort((a, b) => b.updated - a.updated);
+    if (news.length && seen) {
+      const r = news[0];
+      toast(r.status === "agregada" ? `🎉 Ya puedes ver <b>${esc(r.title)}</b>, la película que pediste.`
+        : `😕 <b>${esc(r.title)}</b> no está disponible por ahora.${r.reply ? " " + esc(r.reply) : ""}`
+        + (news.length > 1 ? `<br><small>y ${news.length - 1} novedad(es) más en tus solicitudes</small>` : ""));
+    }
+    store.set(seenKey, Math.max(seen, Date.now()));
+  } catch {}
+}
+function toast(html){
+  const t = $("#toast"); t.innerHTML = html; t.classList.add("on");
+  t.onclick = () => { t.classList.remove("on"); showRequests(); };
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 9000);
+}
+function showRequests(){
+  $("#info .box").innerHTML = `<div class="req">
+    <h2>🎬 Pedir una película</h2>
+    <input id="rq" placeholder="Escribe el nombre de la película…" autocomplete="off">
+    <div class="sres" id="rRes"></div><div class="err" id="rMsg"></div>
+    <div class="tabs" id="rTabs">
+      <button data-f="pendiente">Pendientes</button><button data-f="agregada">Agregadas</button>
+      <button data-f="rechazada">No disponibles</button><button data-f="mias">Mis pedidos</button></div>
+    <div id="rList"><div style="color:var(--mut)">Cargando…</div></div>
+    <div class="acts" style="margin-top:10px"><button id="iClose">Cerrar</button></div></div>`;
+  $("#info").classList.add("on");
+  $("#iClose").onclick = closeInfo;
+  $("#rTabs").querySelectorAll("button").forEach(b => b.onclick = () => { reqFilter = b.dataset.f; drawRequests(); });
+  let tmr;
+  $("#rq").oninput = () => { clearTimeout(tmr); tmr = setTimeout(searchMovie, 400); };
+  loadRequests();
+}
+async function searchMovie(){
+  const q = $("#rq").value.trim(), box = $("#rRes");
+  $("#rMsg").textContent = "";
+  if (q.length < 2) { box.innerHTML = ""; return; }
+  let list = [];
+  try { list = await wapi("/search?q=" + encodeURIComponent(q)); } catch {}
+  if ($("#rq").value.trim() !== q) return; // el usuario siguió escribiendo
+  const have = t => movies.some(m => [m.q, metaOf(m)?.title].filter(Boolean).some(x => x.toLowerCase() === t.toLowerCase()));
+  box.innerHTML = list.map((m, i) => `<div class="sr" data-i="${i}">
+      ${m.poster ? `<img src="${m.poster}" alt="" loading="lazy">` : `<div class="ph"></div>`}
+      <div class="tx"><b>${esc(m.title)}${m.year ? ` (${m.year})` : ""}</b>
+      <small>${have(m.title) ? "✅ Ya está en Mi Cine" : esc(m.overview || "")}</small></div></div>`).join("")
+    + `<div class="sr" data-i="-1"><div class="ph"></div><div class="tx"><b>Pedir “${esc(q)}”</b><small>No la encuentro en la lista</small></div></div>`;
+  box.querySelectorAll(".sr").forEach(el => el.onclick = () => {
+    const i = +el.dataset.i, m = i >= 0 ? list[i] : { title: q, year: "" };
+    box.innerHTML = `<div class="sr" style="cursor:default">${m.poster ? `<img src="${m.poster}" alt="">` : `<div class="ph"></div>`}
+      <div class="tx"><b>${esc(m.title)}${m.year ? ` (${m.year})` : ""}</b>
+      <textarea id="rNote" rows="2" placeholder="Comentario opcional (ej: en español latino)" style="margin-top:6px"></textarea>
+      <div class="ac" style="display:flex;gap:6px;margin-top:6px"><button class="pri" id="rSend">Pedir</button><button id="rBack">Volver</button></div></div></div>`;
+    $("#rBack").onclick = searchMovie;
+    $("#rSend").onclick = async () => {
+      try {
+        const r = await wapi("/requests", { method: "POST", body: JSON.stringify({ ...m, note: $("#rNote").value }) });
+        $("#rq").value = ""; box.innerHTML = "";
+        $("#rMsg").className = "ok";
+        $("#rMsg").textContent = r.existed ? (r.status === "agregada" ? "✓ Esa ya fue agregada: búscala en Mi Cine." : "✓ Alguien ya la había pedido: sumamos tu voto.")
+          : "✓ ¡Pedida! Te avisaremos cuando esté disponible.";
+        reqFilter = "pendiente"; loadRequests();
+      } catch (e) { $("#rMsg").className = "err"; $("#rMsg").textContent = e.message; }
+    };
+  });
+}
+async function loadRequests(){
+  try { reqCache = await wapi("/requests"); drawRequests(); checkBadge(); }
+  catch (e) { $("#rList").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+function checkBadge(){
+  const pend = reqCache.filter(r => r.status === "pendiente").length;
+  $("#btnReq").innerHTML = "🎬 Pedir" + (isAdmin && pend ? `<span class="bdg">${pend}</span>` : "");
+}
+function drawRequests(){
+  const el = $("#rList"); if (!el) return;
+  $("#rTabs").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.f === reqFilter));
+  const list = reqCache.filter(r => reqFilter === "mias" ? (r.mine || r.voted) : r.status === reqFilter);
+  if (!list.length) { el.innerHTML = `<div style="color:var(--mut);padding:10px 0">${reqFilter === "pendiente" ? "No hay pedidos pendientes. ¡Pide una arriba!" : "Nada por aquí."}</div>`; return; }
+  const fecha = t => new Date(t).toLocaleDateString("es-CL", { day: "numeric", month: "short" });
+  el.innerHTML = list.map(r => `<div class="rq" data-id="${r.id}">
+    ${r.poster ? `<img src="${esc(r.poster)}" alt="" loading="lazy">` : `<div class="ph"></div>`}
+    <div class="tx"><b>${esc(r.title)}${r.year ? ` (${esc(r.year)})` : ""}<span class="chip ${r.status}">${ESTADO_TXT[r.status]}</span></b>
+      <small>Pedida por ${esc(r.user)} · ${fecha(r.created)}${r.votes > 1 ? ` · también: ${esc((r.voters || "").split(", ").filter(v => v !== r.user).join(", "))}` : ""}</small>
+      ${r.note ? `<small>“${esc(r.note)}”</small>` : ""}
+      ${r.reply ? `<div class="reply">Respuesta: ${esc(r.reply)}</div>` : ""}
+      <div class="ac">
+        ${r.status === "pendiente" ? `<button class="vote${r.voted ? " on" : ""}">👍 ${r.votes}${r.voted ? " · Yo también" : " Yo también"}</button>` : `<button disabled>👍 ${r.votes}</button>`}
+        ${isAdmin && r.status !== "agregada" ? `<button class="st" data-s="agregada">✓ Agregada</button>` : ""}
+        ${isAdmin && r.status !== "rechazada" ? `<button class="st" data-s="rechazada">✕ No disponible</button>` : ""}
+        ${isAdmin && r.status !== "pendiente" ? `<button class="st" data-s="pendiente">↺ Pendiente</button>` : ""}
+        ${isAdmin || (r.mine && r.status === "pendiente") ? `<button class="del danger">🗑</button>` : ""}
+      </div><div class="slot"></div></div></div>`).join("");
+  el.querySelectorAll(".rq").forEach(card => {
+    const id = card.dataset.id, slot = card.querySelector(".slot");
+    const v = card.querySelector(".vote");
+    if (v) v.onclick = async () => { try { await wapi(`/requests/${id}/vote`, { method: "POST" }); loadRequests(); } catch {} };
+    card.querySelectorAll(".st").forEach(b => b.onclick = () => {
+      const st = b.dataset.s;
+      if (st === "pendiente") return setStatus(id, st, "");
+      slot.innerHTML = `<div class="f" style="display:flex;gap:6px;margin-top:6px">
+        <input class="rp" placeholder="${st === "agregada" ? "Mensaje opcional (ej: ¡ya está!)" : "Motivo opcional (ej: aún no sale en buena calidad)"}">
+        <button class="pri ok2">Guardar</button></div>`;
+      slot.querySelector(".ok2").onclick = () => setStatus(id, st, slot.querySelector(".rp").value);
+    });
+    const d = card.querySelector(".del");
+    if (d) d.onclick = () => {
+      slot.innerHTML = `<div style="display:flex;gap:6px;margin-top:6px;align-items:center"><span>¿Borrar esta solicitud?</span>
+        <button class="danger y">Sí</button><button class="n">No</button></div>`;
+      slot.querySelector(".n").onclick = () => { slot.innerHTML = ""; };
+      slot.querySelector(".y").onclick = async () => { try { await wapi(`/requests/${id}`, { method: "DELETE" }); loadRequests(); } catch (e) { slot.textContent = e.message; } };
+    };
+  });
+}
+async function setStatus(id, status, reply){
+  try { await wapi(`/requests/${id}/status`, { method: "POST", body: JSON.stringify({ status, reply }) }); loadRequests(); }
+  catch (e) { alertBox(e.message); }
+}
+
 /* ---------- Versión ---------- */
 let serverVersion = "";
 function showVersion(){ $("#ver").textContent = "v" + APP_VERSION + (serverVersion ? " · srv " + serverVersion.split("_")[0] : ""); }
@@ -378,7 +536,8 @@ async function start(){
   app.innerHTML = `<div class="center">Cargando tus películas…</div>`;
   try {
     await ensureToken();
-    ["#q","#who"].forEach(s => $(s).hidden = false);
+    ["#q","#who","#btnReq"].forEach(s => $(s).hidden = false);
+    checkRequests();
     $("#who").textContent = "👤 " + user;
     const { videos, subs, imgs } = await scan(folderId);
     movies = videos.map(v => {

@@ -111,6 +111,83 @@ export default {
         return json({ error: "No encontrado" }, 404);
       }
 
+      /* ----- Solicitudes de películas ----- */
+      if (pathname === "/search") {
+        if (!authed) return json({ error: "Sesión inválida" }, 401);
+        if (!env.TMDB_KEY) return json([]);
+        const q = (url.searchParams.get("q") || "").trim();
+        if (q.length < 2) return json([]);
+        return json(await tmdbSearch(q, env.TMDB_KEY));
+      }
+      if (pathname === "/requests" || pathname.startsWith("/requests/")) {
+        if (!authed) return json({ error: "Sesión inválida" }, 401);
+        const db = await appDb(env);
+        if (!db) return json({ error: "Falta conectar la base de datos DB en Cloudflare" }, 501);
+        const [, , rid, action] = pathname.split("/");
+        const id = rid ? parseInt(rid, 10) : null;
+        const now = Date.now();
+
+        if (!id && req.method === "GET") {
+          const { results } = await db.prepare(
+            `SELECT r.*, (SELECT COUNT(*) FROM request_votes v WHERE v.req_id = r.id) AS votes,
+                    EXISTS(SELECT 1 FROM request_votes v WHERE v.req_id = r.id AND v.user = ?1) AS voted,
+                    (SELECT GROUP_CONCAT(v.user, ', ') FROM request_votes v WHERE v.req_id = r.id) AS voters
+             FROM requests r ORDER BY (r.status = 'pendiente') DESC, votes DESC, r.created DESC LIMIT 300`
+          ).bind(data.u).all();
+          return json(results.map(r => ({ ...r, voted: !!r.voted, mine: r.user === data.u })));
+        }
+        if (!id && req.method === "POST") {
+          const b = await req.json();
+          const title = String(b.title || "").trim().slice(0, 120);
+          if (title.length < 2) return json({ error: "Escribe el nombre de la película" }, 400);
+          const year = String(b.year || "").replace(/\D/g, "").slice(0, 4);
+          const tmdbId = Number.isFinite(+b.tmdb_id) && +b.tmdb_id > 0 ? Math.floor(+b.tmdb_id) : null;
+          // Si ya la pidió alguien, se suma el voto en vez de duplicarla
+          const dup = await db.prepare(
+            `SELECT id, status FROM requests WHERE (?1 IS NOT NULL AND tmdb_id = ?1)
+               OR (lower(title) = lower(?2) AND year = ?3) ORDER BY created DESC LIMIT 1`
+          ).bind(tmdbId, title, year).first();
+          if (dup) {
+            await db.prepare("INSERT OR IGNORE INTO request_votes (req_id, user, t) VALUES (?1, ?2, ?3)").bind(dup.id, data.u, now).run();
+            return json({ ok: true, id: dup.id, existed: true, status: dup.status });
+          }
+          const poster = /^https:\/\/image\.tmdb\.org\//.test(b.poster || "") ? b.poster : null;
+          const r = await db.prepare(
+            `INSERT INTO requests (user, title, year, tmdb_id, poster, note, status, created, updated)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pendiente', ?7, ?7)`
+          ).bind(data.u, title, year, tmdbId, poster, String(b.note || "").trim().slice(0, 300), now).run();
+          const newId = r.meta.last_row_id;
+          await db.prepare("INSERT OR IGNORE INTO request_votes (req_id, user, t) VALUES (?1, ?2, ?3)").bind(newId, data.u, now).run();
+          return json({ ok: true, id: newId });
+        }
+        if (!id) return json({ error: "No encontrado" }, 404);
+        const row = await db.prepare("SELECT * FROM requests WHERE id = ?1").bind(id).first();
+        if (!row) return json({ error: "Esa solicitud ya no existe" }, 404);
+
+        if (action === "vote" && req.method === "POST") {
+          const had = await db.prepare("SELECT 1 FROM request_votes WHERE req_id = ?1 AND user = ?2").bind(id, data.u).first();
+          if (had) await db.prepare("DELETE FROM request_votes WHERE req_id = ?1 AND user = ?2").bind(id, data.u).run();
+          else await db.prepare("INSERT INTO request_votes (req_id, user, t) VALUES (?1, ?2, ?3)").bind(id, data.u, now).run();
+          return json({ ok: true, voted: !had });
+        }
+        if (action === "status" && req.method === "POST") {
+          if (!isAdmin) return json({ error: "Solo el administrador puede cambiar el estado" }, 403);
+          const { status, reply } = await req.json();
+          if (!["pendiente", "agregada", "rechazada"].includes(status)) return json({ error: "Estado inválido" }, 400);
+          await db.prepare("UPDATE requests SET status = ?2, reply = ?3, updated = ?4 WHERE id = ?1")
+            .bind(id, status, String(reply || "").trim().slice(0, 300), now).run();
+          return json({ ok: true });
+        }
+        if (!action && req.method === "DELETE") {
+          if (!isAdmin && !(row.user === data.u && row.status === "pendiente"))
+            return json({ error: "Solo puedes borrar tus solicitudes pendientes" }, 403);
+          await db.batch([db.prepare("DELETE FROM request_votes WHERE req_id = ?1").bind(id),
+                          db.prepare("DELETE FROM requests WHERE id = ?1").bind(id)]);
+          return json({ ok: true });
+        }
+        return json({ error: "No encontrado" }, 404);
+      }
+
       /* ----- Cambiar mi propia contraseña ----- */
       if (pathname === "/me/password" && req.method === "POST") {
         if (!authed) return json({ error: "Sesión inválida" }, 401);
@@ -233,6 +310,13 @@ async function appDb(env) {
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS users (
          name TEXT PRIMARY KEY, salt TEXT NOT NULL, hash TEXT NOT NULL,
          ver INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL)`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS requests (
+         id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, title TEXT NOT NULL,
+         year TEXT NOT NULL DEFAULT '', tmdb_id INTEGER, poster TEXT, note TEXT NOT NULL DEFAULT '',
+         status TEXT NOT NULL DEFAULT 'pendiente', reply TEXT NOT NULL DEFAULT '',
+         created INTEGER NOT NULL, updated INTEGER NOT NULL)`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS request_votes (
+         req_id INTEGER NOT NULL, user TEXT NOT NULL, t INTEGER NOT NULL, PRIMARY KEY (req_id, user))`),
     ]);
     dbReady = true;
   }
@@ -267,6 +351,21 @@ function randomHex(n) {
 function srtToVtt(s) {
   return "WEBVTT\n\n" + s.replace(/\r/g, "").replace(/^\uFEFF/, "")
     .replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2").replace(/^\d+\n(?=\d\d:)/gm, "");
+}
+
+/* ---------- Búsqueda para solicitudes ---------- */
+async function tmdbSearch(q, key) {
+  const isToken = key.startsWith("eyJ");
+  const p = new URLSearchParams({ query: q, language: "es-MX", include_adult: "false" });
+  if (!isToken) p.set("api_key", key);
+  const r = await fetch("https://api.themoviedb.org/3/search/movie?" + p,
+    { headers: isToken ? { Authorization: "Bearer " + key } : {} });
+  if (!r.ok) return [];
+  return ((await r.json()).results || []).slice(0, 8).map(m => ({
+    tmdb_id: m.id, title: m.title, year: (m.release_date || "").slice(0, 4),
+    poster: m.poster_path ? "https://image.tmdb.org/t/p/w185" + m.poster_path : null,
+    overview: (m.overview || "").slice(0, 220),
+  }));
 }
 
 /* ---------- Carátulas y sinopsis desde TMDB ---------- */
