@@ -134,7 +134,13 @@ export default {
                     (SELECT GROUP_CONCAT(v.user, ', ') FROM request_votes v WHERE v.req_id = r.id) AS voters
              FROM requests r ORDER BY (r.status = 'pendiente') DESC, votes DESC, r.created DESC LIMIT 300`
           ).bind(data.u).all();
-          return json(results.map(r => ({ ...r, voted: !!r.voted, mine: r.user === data.u })));
+          const all = results.map(r => ({ ...r, voted: !!r.voted, mine: r.user === data.u }));
+          if (isAdmin) return json(all);
+          // Los demás usuarios solo ven lo que pidieron ellos, sin nombres ni votos de otros
+          return json(all.filter(r => r.mine || r.voted).map(r => ({
+            id: r.id, title: r.title, year: r.year, poster: r.poster, note: r.mine ? r.note : "",
+            status: r.status, reply: r.reply, created: r.created, updated: r.updated, mine: true, voted: true,
+          })));
         }
         if (!id && req.method === "POST") {
           const b = await req.json();
@@ -179,8 +185,14 @@ export default {
           return json({ ok: true });
         }
         if (!action && req.method === "DELETE") {
-          if (!isAdmin && !(row.user === data.u && row.status === "pendiente"))
-            return json({ error: "Solo puedes borrar tus solicitudes pendientes" }, 403);
+          if (!isAdmin) {
+            if (row.status !== "pendiente") return json({ error: "Solo puedes quitar pedidos pendientes" }, 403);
+            // Un usuario "quita" su pedido: se borra su voto; si nadie más la pidió, se borra la solicitud
+            await db.prepare("DELETE FROM request_votes WHERE req_id = ?1 AND user = ?2").bind(id, data.u).run();
+            const left = await db.prepare("SELECT COUNT(*) AS n FROM request_votes WHERE req_id = ?1").bind(id).first();
+            if (left.n === 0) await db.prepare("DELETE FROM requests WHERE id = ?1").bind(id).run();
+            return json({ ok: true });
+          }
           await db.batch([db.prepare("DELETE FROM request_votes WHERE req_id = ?1").bind(id),
                           db.prepare("DELETE FROM requests WHERE id = ?1").bind(id)]);
           return json({ ok: true });

@@ -167,8 +167,9 @@
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = "1.9.1";
+const APP_VERSION = "1.9.2";
 const NOVEDADES = [
+  ["1.9.2", "Las solicitudes son privadas: cada usuario ve solo las suyas; el administrador ve todas"],
   ["1.9.1", "Botón “Instalar app” también en Opera, Samsung Internet, Firefox y otros navegadores"],
   ["1.9.0", "Solicitudes de películas: pide una película, vota las de otros y recibe aviso cuando esté disponible"],
   ["1.8.0", "Número de versión en la esquina"],
@@ -284,16 +285,19 @@ function toast(html){
 function showRequests(){
   $("#info .box").innerHTML = `<div class="req">
     <h2>🎬 Pedir una película</h2>
+    ${isAdmin ? "" : `<p style="color:var(--mut);margin:-4px 0 10px;font-size:14px">Tus pedidos solo los ves tú y el administrador.</p>`}
     <input id="rq" placeholder="Escribe el nombre de la película…" autocomplete="off">
     <div class="sres" id="rRes"></div><div class="err" id="rMsg"></div>
-    <div class="tabs" id="rTabs">
+    ${isAdmin ? `<div class="tabs" id="rTabs">
       <button data-f="pendiente">Pendientes</button><button data-f="agregada">Agregadas</button>
-      <button data-f="rechazada">No disponibles</button><button data-f="mias">Mis pedidos</button></div>
+      <button data-f="rechazada">No disponibles</button><button data-f="mias">Mis pedidos</button></div>`
+      : `<h3 style="margin:16px 0 8px">Mis pedidos</h3>`}
     <div id="rList"><div style="color:var(--mut)">Cargando…</div></div>
     <div class="acts" style="margin-top:10px"><button id="iClose">Cerrar</button></div></div>`;
   $("#info").classList.add("on");
   $("#iClose").onclick = closeInfo;
-  $("#rTabs").querySelectorAll("button").forEach(b => b.onclick = () => { reqFilter = b.dataset.f; drawRequests(); });
+  if (!isAdmin) reqFilter = "mias";
+  $("#rTabs")?.querySelectorAll("button").forEach(b => b.onclick = () => { reqFilter = b.dataset.f; drawRequests(); });
   let tmr;
   $("#rq").oninput = () => { clearTimeout(tmr); tmr = setTimeout(searchMovie, 400); };
   loadRequests();
@@ -323,7 +327,7 @@ async function searchMovie(){
         const r = await wapi("/requests", { method: "POST", body: JSON.stringify({ ...m, note: $("#rNote").value }) });
         $("#rq").value = ""; box.innerHTML = "";
         $("#rMsg").className = "ok";
-        $("#rMsg").textContent = r.existed ? (r.status === "agregada" ? "✓ Esa ya fue agregada: búscala en Mi Cine." : "✓ Alguien ya la había pedido: sumamos tu voto.")
+        $("#rMsg").textContent = r.existed && r.status === "agregada" ? "✓ Esa ya fue agregada: búscala en Mi Cine."
           : "✓ ¡Pedida! Te avisaremos cuando esté disponible.";
         reqFilter = "pendiente"; loadRequests();
       } catch (e) { $("#rMsg").className = "err"; $("#rMsg").textContent = e.message; }
@@ -340,22 +344,23 @@ function checkBadge(){
 }
 function drawRequests(){
   const el = $("#rList"); if (!el) return;
-  $("#rTabs").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.f === reqFilter));
+  if (!isAdmin) reqFilter = "mias";
+  $("#rTabs")?.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.f === reqFilter));
   const list = reqCache.filter(r => reqFilter === "mias" ? (r.mine || r.voted) : r.status === reqFilter);
-  if (!list.length) { el.innerHTML = `<div style="color:var(--mut);padding:10px 0">${reqFilter === "pendiente" ? "No hay pedidos pendientes. ¡Pide una arriba!" : "Nada por aquí."}</div>`; return; }
+  if (!list.length) { el.innerHTML = `<div style="color:var(--mut);padding:10px 0">${reqFilter === "pendiente" || !isAdmin ? "No hay pedidos todavía. ¡Pide una arriba!" : "Nada por aquí."}</div>`; return; }
   const fecha = t => new Date(t).toLocaleDateString("es-CL", { day: "numeric", month: "short" });
   el.innerHTML = list.map(r => `<div class="rq" data-id="${r.id}">
     ${r.poster ? `<img src="${esc(r.poster)}" alt="" loading="lazy">` : `<div class="ph"></div>`}
     <div class="tx"><b>${esc(r.title)}${r.year ? ` (${esc(r.year)})` : ""}<span class="chip ${r.status}">${ESTADO_TXT[r.status]}</span></b>
-      <small>Pedida por ${esc(r.user)} · ${fecha(r.created)}${r.votes > 1 ? ` · también: ${esc((r.voters || "").split(", ").filter(v => v !== r.user).join(", "))}` : ""}</small>
+      <small>${isAdmin ? `Pedida por ${esc(r.user)} · ` : "Pedida el "}${fecha(r.created)}${isAdmin && r.votes > 1 ? ` · también: ${esc((r.voters || "").split(", ").filter(v => v !== r.user).join(", "))}` : ""}</small>
       ${r.note ? `<small>“${esc(r.note)}”</small>` : ""}
       ${r.reply ? `<div class="reply">Respuesta: ${esc(r.reply)}</div>` : ""}
       <div class="ac">
-        ${r.status === "pendiente" ? `<button class="vote${r.voted ? " on" : ""}">👍 ${r.votes}${r.voted ? " · Yo también" : " Yo también"}</button>` : `<button disabled>👍 ${r.votes}</button>`}
+        ${isAdmin ? `<button disabled>👍 ${r.votes}</button>` : ""}
         ${isAdmin && r.status !== "agregada" ? `<button class="st" data-s="agregada">✓ Agregada</button>` : ""}
         ${isAdmin && r.status !== "rechazada" ? `<button class="st" data-s="rechazada">✕ No disponible</button>` : ""}
         ${isAdmin && r.status !== "pendiente" ? `<button class="st" data-s="pendiente">↺ Pendiente</button>` : ""}
-        ${isAdmin || (r.mine && r.status === "pendiente") ? `<button class="del danger">🗑</button>` : ""}
+        ${isAdmin || r.status === "pendiente" ? `<button class="del danger">🗑${isAdmin ? "" : " Quitar"}</button>` : ""}
       </div><div class="slot"></div></div></div>`).join("");
   el.querySelectorAll(".rq").forEach(card => {
     const id = card.dataset.id, slot = card.querySelector(".slot");
