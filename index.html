@@ -167,8 +167,9 @@
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = "1.9.2";
+const APP_VERSION = "1.9.3";
 const NOVEDADES = [
+  ["1.9.3", "Aviso en el celular si la TV no logra empezar a reproducir"],
   ["1.9.2", "Las solicitudes son privadas: cada usuario ve solo las suyas; el administrador ve todas"],
   ["1.9.1", "Botón “Instalar app” también en Opera, Samsung Internet, Firefox y otros navegadores"],
   ["1.9.0", "Solicitudes de películas: pide una película, vota las de otros y recibe aviso cuando esté disponible"],
@@ -811,7 +812,7 @@ $("#btnBack").onclick = () => {
 window.addEventListener("pagehide", () => { saveNow(); flushProgress(true); });
 
 /* ---------- Enviar a la TV (Chromecast) ---------- */
-let castReady = false, castingMovie = null, rp = null, rpc = null, castSaveTick = 0, lastCastTime = 0;
+let castWatch = null, castReady = false, castingMovie = null, rp = null, rpc = null, castSaveTick = 0, lastCastTime = 0;
 window.__onGCastApiAvailable = ok => {
   if (!ok) return;
   const ctx = cast.framework.CastContext.getInstance();
@@ -878,6 +879,14 @@ async function castMovie(m){
     if (info.tracks.length) req.activeTrackIds = [1];
     await session.loadMedia(req);
     castingMovie = m; castSaveTick = 0; lastCastTime = req.currentTime;
+    // Si a los 40 s la TV sigue sin avanzar, avisar en el celular con qué probar
+    const startAt = req.currentTime;
+    clearTimeout(castWatch);
+    castWatch = setTimeout(() => {
+      if (castingMovie !== m || rp?.currentTime > startAt + 2) return;
+      toast(`📺 La TV no logra reproducir <b>${esc(meta.title || m.q)}</b>.<br><small>Prueba reiniciar la TV, o pasa la película por
+        <b>convertir.bat</b> (la deja lista para cualquier TV) y vuelve a subirla.</small>`);
+    }, 40000);
     $("#cbTitle").textContent = meta.title || m.q;
     $("#cbDev").textContent = "📺 En " + (session.getCastDevice().friendlyName || "la TV");
     const img = posterOf(m); $("#cbImg").hidden = !img; if (img) $("#cbImg").src = img;
