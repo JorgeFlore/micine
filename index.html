@@ -278,9 +278,9 @@ async function checkRequests(){
     store.set(seenKey, Math.max(seen, Date.now()));
   } catch {}
 }
-function toast(html){
+function toast(html, onTap = showRequests){
   const t = $("#toast"); t.innerHTML = html; t.classList.add("on");
-  t.onclick = () => { t.classList.remove("on"); showRequests(); };
+  t.onclick = () => { t.classList.remove("on"); onTap?.(); };
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 9000);
 }
 function showRequests(){
@@ -885,7 +885,7 @@ async function castMovie(m){
     castWatch = setTimeout(() => {
       if (castingMovie !== m || rp?.currentTime > startAt + 2) return;
       toast(`📺 La TV no logra reproducir <b>${esc(meta.title || m.q)}</b>.<br><small>Prueba reiniciar la TV, o pasa la película por
-        <b>convertir.bat</b> (la deja lista para cualquier TV) y vuelve a subirla.</small>`);
+        <b>convertir.bat</b> (la deja lista para cualquier TV) y vuelve a subirla.</small>`, null);
     }, 40000);
     $("#cbTitle").textContent = meta.title || m.q;
     $("#cbDev").textContent = "📺 En " + (session.getCastDevice().friendlyName || "la TV");
