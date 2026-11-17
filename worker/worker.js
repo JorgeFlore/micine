@@ -18,7 +18,7 @@ const SESSION_DAYS = 30;
 let cached = null; // token de Google en caché
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const origin = req.headers.get("Origin") || "";
     const cors = {
       "Access-Control-Allow-Origin": ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
@@ -200,6 +200,15 @@ export default {
         return json({ error: "No encontrado" }, 404);
       }
 
+      /* ----- Diagnóstico: lo que pidió la TV ----- */
+      if (pathname === "/admin/castlog") {
+        if (!isAdmin) return json({ error: "Solo el administrador" }, 403);
+        const db = await appDb(env);
+        if (!db) return json([]);
+        const { results } = await db.prepare("SELECT * FROM cast_log ORDER BY n DESC LIMIT 40").all();
+        return json(results);
+      }
+
       /* ----- Cambiar mi propia contraseña ----- */
       if (pathname === "/me/password" && req.method === "POST") {
         if (!authed) return json({ error: "Sesión inválida" }, 401);
@@ -268,13 +277,19 @@ export default {
         const [, kind, id] = castMatch;
         const open = { "Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges" };
         const ct = await verifySession(url.searchParams.get("t") || "", env.SESSION_SECRET);
-        if (!ct || !Array.isArray(ct.c) || !ct.c.includes(id) || !(await userValid(env, users, ct.u, ct.v)))
+        const logIt = status => ctx?.waitUntil(castLog(env, {
+          kind, id, u: ct?.u || "?", status, method: req.method,
+          range: req.headers.get("Range") || "", ua: req.headers.get("User-Agent") || "" }).catch(() => {}));
+        if (!ct || !Array.isArray(ct.c) || !ct.c.includes(id) || !(await userValid(env, users, ct.u, ct.v))) {
+          logIt(403);
           return new Response("Enlace vencido", { status: 403, headers: open });
+        }
         const g = await googleToken(env);
         const headers = { Authorization: "Bearer " + g.token };
         const range = req.headers.get("Range");
         if (range && kind === "cast") headers.Range = range;
         const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`, { headers });
+        logIt(r.status);
         if (!r.ok) return new Response("Drive " + r.status, { status: r.status, headers: open });
         if (kind === "castsub") {
           let txt = await r.text();
@@ -327,12 +342,26 @@ async function appDb(env) {
          year TEXT NOT NULL DEFAULT '', tmdb_id INTEGER, poster TEXT, note TEXT NOT NULL DEFAULT '',
          status TEXT NOT NULL DEFAULT 'pendiente', reply TEXT NOT NULL DEFAULT '',
          created INTEGER NOT NULL, updated INTEGER NOT NULL)`),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS cast_log (
+         n INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER NOT NULL, kind TEXT, id TEXT, user TEXT,
+         status INTEGER, method TEXT, range TEXT, ua TEXT)`),
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS request_votes (
          req_id INTEGER NOT NULL, user TEXT NOT NULL, t INTEGER NOT NULL, PRIMARY KEY (req_id, user))`),
     ]);
     dbReady = true;
   }
   return env.DB;
+}
+
+/* ---------- Registro de lo que pide la TV (últimos 100) ---------- */
+async function castLog(env, e) {
+  const db = await appDb(env);
+  if (!db) return;
+  await db.batch([
+    db.prepare("INSERT INTO cast_log (t, kind, id, user, status, method, range, ua) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")
+      .bind(Date.now(), e.kind, e.id, e.u, e.status, e.method, e.range.slice(0, 60), e.ua.slice(0, 200)),
+    db.prepare("DELETE FROM cast_log WHERE n <= (SELECT MAX(n) - 100 FROM cast_log)"),
+  ]);
 }
 
 /* ---------- Usuarios creados desde la app ---------- */

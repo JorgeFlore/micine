@@ -167,8 +167,9 @@
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = "1.9.3";
+const APP_VERSION = "1.9.4";
 const NOVEDADES = [
+  ["1.9.4", "Herramientas de diagnóstico para el administrador: formato de cada película y registro de la TV"],
   ["1.9.3", "Aviso en el celular si la TV no logra empezar a reproducir"],
   ["1.9.2", "Las solicitudes son privadas: cada usuario ve solo las suyas; el administrador ve todas"],
   ["1.9.1", "Botón “Instalar app” también en Opera, Samsung Internet, Firefox y otros navegadores"],
@@ -426,6 +427,7 @@ async function showAccount(){
       <div class="f"><input type="password" id="aOld" placeholder="Contraseña actual" autocomplete="current-password"></div>
       <div class="f"><input type="password" id="aNew" placeholder="Contraseña nueva (mín. 6)" autocomplete="new-password"><button id="aSave">Guardar</button></div>
       <div class="ok" id="aMsg"></div>`}
+    ${isAdmin ? `<h3>Diagnóstico</h3><button id="aCastLog">📺 Qué pidió la TV</button><div id="cLog"></div>` : ""}
     ${isAdmin ? `<h3>Usuarios</h3><div class="ulist" id="uList"><div style="color:var(--mut)">Cargando…</div></div>
       <h3>Agregar usuario</h3>
       <div class="f"><input id="nName" placeholder="Nombre (ej: mama)" autocapitalize="none" autocomplete="off"></div>
@@ -445,6 +447,19 @@ async function showAccount(){
     } catch (e) { $("#aMsg").className = "err"; $("#aMsg").textContent = e.message; }
   };
   if (!isAdmin) return;
+  $("#aCastLog").onclick = async () => {
+    const el = $("#cLog"); el.innerHTML = `<div style="color:var(--mut)">Cargando…</div>`;
+    try {
+      const list = await wapi("/admin/castlog");
+      const name = id => movies.find(x => x.id === id)?.q || "subtítulo/otra";
+      const dev = ua => /CrKey/.test(ua) ? "Chromecast" : /Android/.test(ua) ? "Android TV" : /Web0S|webOS/.test(ua) ? "LG" : /Tizen/.test(ua) ? "Samsung" : (ua.split(" ")[0] || "?");
+      el.innerHTML = list.length ? `<div style="font-size:12px;margin-top:8px;max-height:260px;overflow:auto">` + list.map(r =>
+        `<div style="border-bottom:1px solid #2c313c;padding:4px 0">${new Date(r.t).toLocaleTimeString("es-CL")} ·
+         <b>${r.status === 200 || r.status === 206 ? "✅" : "❌"} ${r.status}</b> · ${esc(r.method)} · ${esc(name(r.id))}
+         · <b>${esc(dev(r.ua))}</b>${r.range ? " · " + esc(r.range) : ""}<br><span style="color:var(--mut)">${esc(r.ua)}</span></div>`).join("") + "</div>"
+        : `<div style="color:var(--mut);margin-top:6px">La TV todavía no ha pedido nada. Envía una película y vuelve a mirar.</div>`;
+    } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  };
   $("#nGen").onclick = () => { $("#nPass").value = genPass(); };
   $("#nAdd").onclick = async () => {
     const name = $("#nName").value.trim().toLowerCase(), pass = $("#nPass").value;
@@ -670,6 +685,31 @@ async function loadPosters(){
   }
 }
 
+/* ---------- Diagnóstico de formato (lee los primeros 4 MB del archivo) ---------- */
+async function detectFormat(m){
+  await ensureToken();
+  const r = await fetch(`${API}/files/${m.id}?alt=media&supportsAllDrives=true`,
+    { headers: { Authorization: "Bearer " + token, Range: "bytes=0-4194303" } });
+  if (!r.ok && r.status !== 206) throw new Error("Drive " + r.status);
+  const b = new Uint8Array(await r.arrayBuffer());
+  let t = ""; for (let i = 0; i < b.length; i += 8192) t += String.fromCharCode.apply(null, b.subarray(i, i + 8192));
+  const has = x => t.includes(x);
+  const mkv = /\.mkv$/i.test(m.name) || has("matroska");
+  const video = has("hvc1") ? "H.265/HEVC (hvc1)" : has("hev1") ? "H.265/HEVC (hev1)" : has("V_MPEGH/ISO/HEVC") ? "H.265/HEVC"
+    : has("avc1") || has("V_MPEG4/ISO/AVC") ? "H.264" : has("av01") || has("V_AV1") ? "AV1" : has("vp09") || has("V_VP9") ? "VP9" : "desconocido";
+  const audio = [["mp4a","AAC"],["A_AAC","AAC"],["ac-3","AC3 (Dolby)"],["A_AC3","AC3 (Dolby)"],["ec-3","E-AC3 (Dolby+)"],
+    ["A_EAC3","E-AC3 (Dolby+)"],["A_DTS","DTS"],["dtsc","DTS"],["Opus","Opus"],["A_OPUS","Opus"]]
+    .filter(([k]) => has(k)).map(([, v]) => v).filter((v, i, a) => a.indexOf(v) === i).join(" + ") || "desconocido";
+  const ok = (cond, si, no) => cond ? `✅ ${si}` : `⚠️ ${no}`;
+  const lines = [
+    `Contenedor: <b>${mkv ? "MKV" : "MP4"}</b> ${mkv ? "⚠️ (muchas TVs no lo reproducen)" : ""}`,
+    `Video: <b>${video}</b> ${video.startsWith("H.265") ? "⚠️ (algunas TVs/Chromecast no lo soportan)" : ""}`,
+    `Audio: <b>${audio}</b> ${/AC3|DTS/.test(audio) ? "⚠️ (el navegador no lo reproduce)" : ""}`,
+  ];
+  if (!mkv) lines.push(ok(has("moov"), "Índice al inicio (lista para TV)", "Índice al final: pásala por convertir.bat"));
+  return lines.join("<br>");
+}
+
 /* ---------- Ficha de la película ---------- */
 function showInfo(m){
   const meta = metaOf(m) || {}, img = posterOf(m);
@@ -683,6 +723,7 @@ function showInfo(m){
       <div class="acts">
         <button class="pri" id="iPlay">▶ ${pos > 60 && !pr.d ? "Continuar" : "Ver"}</button>
         ${castAvailable() ? `<button id="iCast">📺 Ver en la TV</button>` : ""}
+        ${isAdmin ? `<button id="iFmt">🔍 Formato</button>` : ""}
         ${pos > 60 ? `<button id="iRestart">Desde el inicio</button>` : ""}
         <button id="iClose">Cerrar</button>
       </div></div>`;
@@ -691,6 +732,11 @@ function showInfo(m){
   $("#iClose").onclick = close;
   $("#iPlay").onclick = () => { close(); play(m); };
   if ($("#iCast")) $("#iCast").onclick = () => { close(); castMovie(m); };
+  if ($("#iFmt")) $("#iFmt").onclick = async () => {
+    const b = $("#iFmt"); b.disabled = true; b.textContent = "🔍 Analizando…";
+    try { b.outerHTML = `<div class="reply" style="width:100%">${await detectFormat(m)}</div>`; }
+    catch (e) { b.textContent = "No se pudo analizar"; }
+  };
   if ($("#iRestart")) $("#iRestart").onclick = () => { setProg(m.id, 0, false); close(); play(m); };
 }
 $("#info").onclick = e => { if (e.target.id === "info") $("#info").classList.remove("on"); };
