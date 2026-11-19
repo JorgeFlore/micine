@@ -167,8 +167,9 @@
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = "1.9.6";
+const APP_VERSION = "1.9.7";
 const NOVEDADES = [
+  ["1.9.7", "Prueba de velocidad del envío a la TV (diagnóstico del administrador)"],
   ["1.9.6", "El diagnóstico detecta MP4 fragmentados y audio HE-AAC, que fallan en algunas TVs"],
   ["1.9.5", "Diagnóstico de formato más detallado: resolución, perfil, nivel, profundidad de color y canales de audio"],
   ["1.9.4", "Herramientas de diagnóstico para el administrador: formato de cada película y registro de la TV"],
@@ -687,6 +688,33 @@ async function loadPosters(){
   }
 }
 
+/* ---------- Prueba de velocidad: lo mismo que descarga la TV, medido desde aquí ---------- */
+async function measure(url, headers = {}){
+  const t0 = performance.now(), ctl = new AbortController();
+  const stop = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const r = await fetch(url, { headers: { Range: "bytes=0-", ...headers }, signal: ctl.signal });
+    const ttfb = (performance.now() - t0) / 1000;
+    const info = `HTTP ${r.status} · largo ${r.headers.get("Content-Length") ? (+r.headers.get("Content-Length") / 1e9).toFixed(2) + " GB" : "sin informar"}`;
+    if (!r.ok) return `❌ ${info}`;
+    const rd = r.body.getReader(); let n = 0, t1 = performance.now();
+    try { while (n < 24e6) { const { done, value } = await rd.read(); if (done) break; n += value.length; } } catch {}
+    const secs = (performance.now() - t1) / 1000; ctl.abort();
+    const mbps = n * 8 / 1e6 / Math.max(secs, 0.01);
+    return `${mbps >= 8 ? "✅" : mbps >= 3 ? "⚠️" : "❌"} ${(n / 1e6).toFixed(1)} MB en ${secs.toFixed(1)} s = <b>${mbps.toFixed(1)} Mbit/s</b> · 1er byte ${ttfb.toFixed(1)} s · ${info}`;
+  } catch (e) { return `❌ ${e.name === "AbortError" ? "no respondió en 15 s" : e.message}`; }
+  finally { clearTimeout(stop); }
+}
+async function speedTest(m){
+  const link = await wapi(`/castlink?id=${m.id}&subs=`);
+  const viaServer = await measure(link.video);
+  await ensureToken();
+  const direct = await measure(`${API}/files/${m.id}?alt=media&supportsAllDrives=true`, { Authorization: "Bearer " + token });
+  const dur = (+m.videoMediaMetadata?.durationMillis || 0) / 1000, need = dur ? (+m.size * 8 / 1e6 / dur) : 0;
+  return `Necesita ≈ <b>${need.toFixed(1)} Mbit/s</b> para verse sin cortes<br>
+    Por el servidor (como la TV): ${viaServer}<br>Directo desde Drive: ${direct}`;
+}
+
 /* ---------- Diagnóstico de formato (lee los primeros 4 MB del archivo) ---------- */
 async function detectFormat(m){
   await ensureToken();
@@ -784,7 +812,7 @@ function showInfo(m){
       <div class="acts">
         <button class="pri" id="iPlay">▶ ${pos > 60 && !pr.d ? "Continuar" : "Ver"}</button>
         ${castAvailable() ? `<button id="iCast">📺 Ver en la TV</button>` : ""}
-        ${isAdmin ? `<button id="iFmt">🔍 Formato</button>` : ""}
+        ${isAdmin ? `<button id="iFmt">🔍 Formato</button><button id="iSpeed">⚡ Velocidad TV</button>` : ""}
         ${pos > 60 ? `<button id="iRestart">Desde el inicio</button>` : ""}
         <button id="iClose">Cerrar</button>
       </div></div>`;
@@ -793,6 +821,11 @@ function showInfo(m){
   $("#iClose").onclick = close;
   $("#iPlay").onclick = () => { close(); play(m); };
   if ($("#iCast")) $("#iCast").onclick = () => { close(); castMovie(m); };
+  if ($("#iSpeed")) $("#iSpeed").onclick = async () => {
+    const b = $("#iSpeed"); b.disabled = true; b.textContent = "⚡ Midiendo… (≈20 s)";
+    try { b.outerHTML = `<div class="reply" style="width:100%">${await speedTest(m)}</div>`; }
+    catch (e) { b.textContent = "Error: " + e.message; }
+  };
   if ($("#iFmt")) $("#iFmt").onclick = async () => {
     const b = $("#iFmt"); b.disabled = true; b.textContent = "🔍 Analizando…";
     try { b.outerHTML = `<div class="reply" style="width:100%">${await detectFormat(m)}</div>`; }
