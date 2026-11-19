@@ -167,8 +167,9 @@
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = "1.9.4";
+const APP_VERSION = "1.9.5";
 const NOVEDADES = [
+  ["1.9.5", "Diagnóstico de formato más detallado: resolución, perfil, nivel, profundidad de color y canales de audio"],
   ["1.9.4", "Herramientas de diagnóstico para el administrador: formato de cada película y registro de la TV"],
   ["1.9.3", "Aviso en el celular si la TV no logra empezar a reproducir"],
   ["1.9.2", "Las solicitudes son privadas: cada usuario ve solo las suyas; el administrador ve todas"],
@@ -707,7 +708,46 @@ async function detectFormat(m){
     `Audio: <b>${audio}</b> ${/AC3|DTS/.test(audio) ? "⚠️ (el navegador no lo reproduce)" : ""}`,
   ];
   if (!mkv) lines.push(ok(has("moov"), "Índice al inicio (lista para TV)", "Índice al final: pásala por convertir.bat"));
+  if (!mkv) lines.push(...mp4Details(b, t));
   return lines.join("<br>");
+}
+/* Lee datos finos del MP4: resolución, perfil/nivel H.264 o H.265, bits de color, canales y frecuencia del audio */
+function mp4Details(b, t){
+  const u16 = i => (b[i] << 8) | b[i + 1], out = [];
+  const PERF = { 66: "Baseline", 77: "Main", 88: "Extended", 100: "High", 110: "High 10 (10 bits)", 122: "High 4:2:2", 244: "High 4:4:4" };
+  // Caja de video: [tamaño][avc1|hvc1|hev1] + 78 bytes de VisualSampleEntry + [tamaño][avcC|hvcC]
+  for (const [entry, cfg] of [["avc1", "avcC"], ["hvc1", "hvcC"], ["hev1", "hvcC"]]) {
+    let from = 0, A;
+    while ((A = t.indexOf(cfg, from)) > 90) {
+      from = A + 1;
+      if (t.substr(A - 86, 4) !== entry) continue;
+      const w = u16(A - 58), h = u16(A - 56);
+      let det = `${w}×${h}`;
+      if (cfg === "avcC") {
+        const prof = b[A + 5], lvl = b[A + 7] / 10;
+        det += ` · perfil ${PERF[prof] || prof} · nivel ${lvl}`;
+        if (prof >= 110) det += " ⚠️ (muchas TVs no decodifican este perfil)";
+        else if (lvl > 4.2) det += " ⚠️ (nivel alto: algunas TVs fallan sobre 4.1)";
+      } else {
+        const prof = b[A + 5] & 0x1f, lvl = b[A + 16] / 30;
+        det += ` · perfil ${prof === 2 ? "Main 10 (10 bits)" : prof === 1 ? "Main" : prof} · nivel ${lvl}`;
+      }
+      if (w > 1920 || h > 1088) det += " ⚠️ (4K: no todas las TVs/Chromecast lo soportan)";
+      out.push(`Imagen: <b>${det}</b>`);
+      break;
+    }
+    if (out.length) break;
+  }
+  // Caja de audio AAC: [tamaño][mp4a] + 28 bytes de AudioSampleEntry + [tamaño][esds]
+  let from = 0, E;
+  while ((E = t.indexOf("esds", from)) > 40) {
+    from = E + 1;
+    if (t.substr(E - 36, 4) !== "mp4a") continue;
+    const ch = u16(E - 16), hz = u16(E - 8);
+    out.push(`Sonido: <b>${ch === 1 ? "mono" : ch === 2 ? "estéreo" : ch === 6 ? "5.1" : ch + " canales"} · ${hz} Hz</b>${ch > 2 ? " ⚠️ (algunas TVs con Chromecast integrado fallan con 5.1)" : ""}`);
+    break;
+  }
+  return out;
 }
 
 /* ---------- Ficha de la película ---------- */
