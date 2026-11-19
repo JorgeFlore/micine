@@ -167,8 +167,9 @@
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = "1.9.5";
+const APP_VERSION = "1.9.6";
 const NOVEDADES = [
+  ["1.9.6", "El diagnóstico detecta MP4 fragmentados y audio HE-AAC, que fallan en algunas TVs"],
   ["1.9.5", "Diagnóstico de formato más detallado: resolución, perfil, nivel, profundidad de color y canales de audio"],
   ["1.9.4", "Herramientas de diagnóstico para el administrador: formato de cada película y registro de la TV"],
   ["1.9.3", "Aviso en el celular si la TV no logra empezar a reproducir"],
@@ -709,7 +710,24 @@ async function detectFormat(m){
   ];
   if (!mkv) lines.push(ok(has("moov"), "Índice al inicio (lista para TV)", "Índice al final: pásala por convertir.bat"));
   if (!mkv) lines.push(...mp4Details(b, t));
+  if (!mkv) lines.push(ok(!(has("moof") || has("mvex")), "MP4 normal (no fragmentado)",
+    "MP4 fragmentado (típico de descargas web): algunas TVs no lo reproducen; pásala por convertir.bat"));
+  if (!mkv) lines.push(`Marca del archivo: <b>${esc(t.substr(8, 4).replace(/[^\x20-\x7e]/g, "?"))}</b>`);
   return lines.join("<br>");
+}
+/* Tipo de AAC según el esds: 2 = AAC-LC, 5 = HE-AAC, 29 = HE-AAC v2 */
+function aacType(b, E){
+  try {
+    let p = E + 8;                                   // tras "esds" + versión/flags
+    const len = () => { let n = 0, k = 0, c; do { c = b[p++]; n = (n << 7) | (c & 0x7f); } while (c & 0x80 && ++k < 4); return n; };
+    if (b[p++] !== 3) return 0; len();               // ES_Descriptor
+    p += 2; const f = b[p++];
+    if (f & 0x80) p += 2; if (f & 0x40) p += 1 + b[p]; if (f & 0x20) p += 2;
+    if (b[p++] !== 4) return 0; len(); p += 13;      // DecoderConfigDescriptor
+    if (b[p++] !== 5) return 0; len();               // DecoderSpecificInfo
+    const a = b[p] >> 3;
+    return a === 31 ? 32 + (((b[p] & 7) << 3) | (b[p + 1] >> 5)) : a;
+  } catch { return 0; }
 }
 /* Lee datos finos del MP4: resolución, perfil/nivel H.264 o H.265, bits de color, canales y frecuencia del audio */
 function mp4Details(b, t){
@@ -744,7 +762,10 @@ function mp4Details(b, t){
     from = E + 1;
     if (t.substr(E - 36, 4) !== "mp4a") continue;
     const ch = u16(E - 16), hz = u16(E - 8);
-    out.push(`Sonido: <b>${ch === 1 ? "mono" : ch === 2 ? "estéreo" : ch === 6 ? "5.1" : ch + " canales"} · ${hz} Hz</b>${ch > 2 ? " ⚠️ (algunas TVs con Chromecast integrado fallan con 5.1)" : ""}`);
+    const aot = aacType(b, E);
+    const tipo = aot === 5 ? "HE-AAC" : aot === 29 ? "HE-AAC v2" : aot === 2 ? "AAC-LC" : aot ? "AAC (tipo " + aot + ")" : "AAC";
+    if (aot === 5 || aot === 29) out.push("⚠️ Audio HE-AAC: algunas TVs con Chromecast integrado no lo reproducen; pásala por convertir.bat");
+    out.push(`Sonido: <b>${tipo} · ${ch === 1 ? "mono" : ch === 2 ? "estéreo" : ch === 6 ? "5.1" : ch + " canales"} · ${hz} Hz</b>${ch > 2 ? " ⚠️ (algunas TVs con Chromecast integrado fallan con 5.1)" : ""}`);
     break;
   }
   return out;
